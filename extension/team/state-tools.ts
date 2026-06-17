@@ -217,7 +217,12 @@ export function makePlanSaveTool(hooks: PlanSaveHooks): ToolDefinition<typeof Pl
 
 // ---- goals ledger helpers (STEP 6) -------------------------------------------
 
-const GOALS_PATH = "ledger/goals.json";
+const GOALS_DIR = "ledger/goals";
+const GOALS_INDEX = "ledger/goals-index.json";
+
+function goalPath(id: string): string { return `${GOALS_DIR}/${id}.json`; }
+
+const GOALS_PATH = "ledger/goals.json"; // legacy compat path, no longer primary
 const EVENTS_PATH = "ledger/events.jsonl";
 const TRACE_ERRORS_PATH = "ledger/trace-errors.jsonl";
 const TELEMETRY_PATH = "ledger/telemetry.jsonl";
@@ -276,22 +281,54 @@ async function spanEnd(
 }
 
 export async function readGoals(state: StateWriter): Promise<GoalsState> {
-	const res = await state.readTokyoJson(GOALS_PATH);
-	if (res && res.ok && res.value && Array.isArray((res.value as unknown as GoalsState).goals)) {
-		const raw = res.value as unknown as GoalsState;
-		// Validate per-goal shape (M3 fix): filter out malformed entries
-		raw.goals = raw.goals.filter(
-			(g) => g && typeof g.id === "string" && typeof g.objective === "string" && typeof g.status === "string",
-		);
-		return raw;
+	// Read index for goal ids + current_goal_id
+	const idxRes = await state.readTokyoJson(GOALS_INDEX);
+	const goalIds: string[] = [];
+	let currentGoalId: string | null = null;
+	if (idxRes?.ok && idxRes.value) {
+		const idx = idxRes.value as { goal_ids?: string[]; current_goal_id?: string | null };
+		if (Array.isArray(idx.goal_ids)) goalIds.push(...idx.goal_ids);
+		currentGoalId = typeof idx.current_goal_id === "string" ? idx.current_goal_id : null;
 	}
-	return emptyGoalsState();
+	// Fall back to legacy GOALS_PATH if index missing (migration)
+	if (goalIds.length === 0) {
+		const legacy = await state.readTokyoJson(GOALS_PATH);
+		if (legacy?.ok && legacy.value) {
+			const raw = legacy.value as unknown as GoalsState;
+			if (Array.isArray(raw.goals)) {
+				raw.goals = raw.goals.filter((g: any) => g && typeof g.id === "string" && typeof g.objective === "string" && typeof g.status === "string");
+				return { goals: raw.goals, current_goal_id: raw.current_goal_id ?? null };
+			}
+		}
+		return emptyGoalsState();
+	}
+	// Read each goal file atomically (per-file writes = no race between concurrent goal ops)
+	const goals: Goal[] = [];
+	for (const id of goalIds) {
+		const r = await state.readTokyoJson(goalPath(id));
+		if (r?.ok && r.value) goals.push(r.value as unknown as Goal);
+	}
+	return { goals, current_goal_id: currentGoalId };
 }
 
-async function writeGoals(state: StateWriter, goals: GoalsState, verb: string): Promise<void> {
-	await state.writeJsonAtomic(GOALS_PATH, goals, {
-		audit: { category: "state", verb, skill: "execute", owner: "tokyo-runtime" },
+async function writeGoal(state: StateWriter, goal: Goal): Promise<void> {
+	await state.writeJsonAtomic(goalPath(goal.id), goal, {
+		audit: { category: "state", verb: "goal_write", skill: "execute", owner: "tokyo-runtime" },
 	});
+}
+
+async function writeGoalIndex(state: StateWriter, goals: Goal[], currentGoalId: string | null): Promise<void> {
+	await state.writeJsonAtomic(GOALS_INDEX, {
+		goal_ids: goals.map((g) => g.id),
+		current_goal_id: currentGoalId,
+	}, {
+		audit: { category: "state", verb: "goal_index", skill: "execute", owner: "tokyo-runtime" },
+	});
+}
+
+async function writeAllGoals(state: StateWriter, goals: Goal[], currentGoalId: string | null, _verb?: string): Promise<void> {
+	for (const g of goals) await writeGoal(state, g);
+	await writeGoalIndex(state, goals, currentGoalId);
 }
 
 // ---- tokyo_goal (create/list/drop) -------------------------------------------
@@ -350,7 +387,7 @@ export function makeGoalTool(hooks: GoalHooks): ToolDefinition<typeof GoalParams
 				};
 				goals.goals.push(goal);
 				goals.current_goal_id = goal.id;
-				await writeGoals(hooks.state, goals, "goal_create");
+				await writeAllGoals(hooks.state, goals.goals, goals.current_goal_id);
 				hooks.onGoalsChange?.(goals);
 				await traceEvent(hooks.state, { ts: now, type: "goal_created", goal_id: goal.id, objective: goal.objective }, { category: "ledger", verb: "goal_created", skill: "execute" });
 				return okResult(`Goal created: [${goal.id}] ${goal.objective}`, "create", goals);
@@ -362,7 +399,7 @@ export function makeGoalTool(hooks: GoalHooks): ToolDefinition<typeof GoalParams
 				goal.status = "dropped";
 				goal.updated_at = now;
 				if (goals.current_goal_id === id) goals.current_goal_id = nextActiveGoal(goals)?.id ?? null;
-				await writeGoals(hooks.state, goals, "goal_drop");
+				await writeAllGoals(hooks.state, goals.goals, goals.current_goal_id);
 				hooks.onGoalsChange?.(goals);
 				await traceEvent(hooks.state, { ts: now, type: "goal_dropped", goal_id: id }, { category: "ledger", verb: "goal_dropped", skill: "execute" });
 				return okResult(`Goal dropped: ${id}`, "drop", goals);
@@ -384,7 +421,7 @@ export function makeGoalTool(hooks: GoalHooks): ToolDefinition<typeof GoalParams
 					newIds.push(sub.id);
 				}
 				goals.current_goal_id = newIds[0] ?? null;
-				await writeGoals(hooks.state, goals, "goal_split");
+				await writeAllGoals(hooks.state, goals.goals, goals.current_goal_id);
 				hooks.onGoalsChange?.(goals);
 				await traceEvent(hooks.state, { ts: now, type: "goal_split", original_id: id, new_ids: newIds }, { category: "ledger", verb: "goal_split", skill: "execute" });
 				return okResult(`Goal ${id} split into ${newIds.length} sub-goals: ${newIds.join(", ")}`, "split", goals);
@@ -405,7 +442,7 @@ export function makeGoalTool(hooks: GoalHooks): ToolDefinition<typeof GoalParams
 					if (!params.order.includes(g.id)) ordered.push(g);
 				}
 				goals.goals = ordered;
-				await writeGoals(hooks.state, goals, "goal_reorder");
+				await writeAllGoals(hooks.state, goals.goals, goals.current_goal_id);
 				hooks.onGoalsChange?.(goals);
 				return okResult(`Goals reordered: ${params.order.join(" → ")}`, "reorder", goals);
 			}
@@ -418,7 +455,7 @@ export function makeGoalTool(hooks: GoalHooks): ToolDefinition<typeof GoalParams
 				const oldObjective = goal.objective;
 				goal.objective = params.objective.trim();
 				goal.updated_at = now;
-				await writeGoals(hooks.state, goals, "goal_revise");
+				await writeAllGoals(hooks.state, goals.goals, goals.current_goal_id);
 				hooks.onGoalsChange?.(goals);
 				await traceEvent(hooks.state, { ts: now, type: "goal_revised", goal_id: id, old: oldObjective, new: goal.objective }, { category: "ledger", verb: "goal_revised", skill: "execute" });
 				return okResult(`Goal ${id} revised: "${goal.objective}"`, "revise", goals);
@@ -432,7 +469,7 @@ export function makeGoalTool(hooks: GoalHooks): ToolDefinition<typeof GoalParams
 				(goal as unknown as Record<string, unknown>).blocked_reason = params.reason ?? "unspecified";
 				goal.updated_at = now;
 				if (goals.current_goal_id === id) goals.current_goal_id = nextActiveGoal(goals)?.id ?? null;
-				await writeGoals(hooks.state, goals, "goal_block");
+				await writeAllGoals(hooks.state, goals.goals, goals.current_goal_id);
 				hooks.onGoalsChange?.(goals);
 				await traceEvent(hooks.state, { ts: now, type: "goal_blocked", goal_id: id, reason: params.reason }, { category: "ledger", verb: "goal_blocked", skill: "execute" });
 				return okResult(`Goal ${id} blocked: ${params.reason ?? "unspecified"}`, "block", goals);
@@ -446,7 +483,7 @@ export function makeGoalTool(hooks: GoalHooks): ToolDefinition<typeof GoalParams
 				delete (goal as unknown as Record<string, unknown>).blocked_reason;
 				goal.updated_at = now;
 				if (!goals.current_goal_id) goals.current_goal_id = goal.id;
-				await writeGoals(hooks.state, goals, "goal_unblock");
+				await writeAllGoals(hooks.state, goals.goals, goals.current_goal_id);
 				hooks.onGoalsChange?.(goals);
 				await traceEvent(hooks.state, { ts: now, type: "goal_unblocked", goal_id: id }, { category: "ledger", verb: "goal_unblocked", skill: "execute" });
 				return okResult(`Goal ${id} unblocked and active.`, "unblock", goals);
@@ -527,6 +564,23 @@ export function makeCompleteTool(hooks: CompleteHooks): ToolDefinition<typeof Co
 				return failComplete(goal.id, "evidence must be an array of {kind, status, detail} items");
 			}
 
+			// OMO ORACLE GATE (universal): every goal completion needs at least one
+			// inspected-by-independent-reviewer evidence with status:'verified' — not
+			// just any inspection. Self-declared completion without third-party sign-off
+			// is not trusted. Spawn reviewer via spawn_subagents agent:"reviewer".
+			const hasVerifiedReview = evidence.some(
+				(e) => e.kind === "inspection" && e.status === "verified",
+			);
+			if (!hasVerifiedReview && !isNonCodeGoal) {
+				return failComplete(goal.id,
+					"Oracle gate: a VERIFIED inspection from an independent reviewer is required. " +
+					"Run spawn_subagents agent:'reviewer' to audit this goal's work. " +
+					"The reviewer must return status:'verified' in its evidence — any other status is rejected. " +
+					"Non-reviewer inspection evidence is not sufficient. " +
+					"(Non-code goals like docs/config may skip this gate.)",
+				);
+			}
+
 			// TDD ENFORCEMENT: code goals require at least one test command evidence.
 			const hasTestEvidence = evidence.some(
 				(e) => e.kind === "command" && /test|spec|jest|vitest|bun test|cargo test|pytest|mocha|rspec/i.test(e.detail),
@@ -576,7 +630,7 @@ export function makeCompleteTool(hooks: CompleteHooks): ToolDefinition<typeof Co
 			goal.updated_at = now;
 			goal.receipt_sha256 = receipt.content_sha256;
 			if (goals.current_goal_id === goal.id) goals.current_goal_id = nextActiveGoal(goals)?.id ?? null;
-			await writeGoals(hooks.state, goals, "goal_complete");
+			await writeAllGoals(hooks.state, goals.goals, goals.current_goal_id);
 			hooks.onGoalsChange?.(goals);
 			// the matching ledger event the disk-guard binds to (carries a UUID eventId)
 			await traceEvent(hooks.state,

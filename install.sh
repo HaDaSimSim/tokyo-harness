@@ -73,7 +73,8 @@ else
     "explore":   { "category": "fast" },
     "skeptic":   { "category": "fast" },
     "validator": { "category": "deep" },
-    "researcher":{ "category": "deep" }
+    "researcher":{ "category": "deep" },
+    "frontend":  { "category": "frontend" }
   },
   "defaults": { "model": "relay/claude-opus-4.8" }
 }

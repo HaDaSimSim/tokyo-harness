@@ -30,6 +30,7 @@ import { makeAmbiguityTool } from "./team/interview.ts";
 import { makePlanSaveTool, makeCompleteTool, makeGoalTool, makeSpecSaveTool, makeVerifyTool, hasVerifyEvidence, readGoals } from "./team/state-tools.ts";
 import { makeMemoryTool, readMemories } from "./team/memory.ts";
 import { makeNotepadTool } from "./team/notepad.ts";
+import { readSessionState, writeSessionState } from "./state/session.ts";
 import { makeTeamTool, teardownAllTeams } from "./team/team-tools.ts";
 import { TeamCoordinator } from "./team/coordination.ts";
 import { makePhaseTool } from "./team/tools.ts";
@@ -255,6 +256,18 @@ export default function harness(pi: ExtensionAPI) {
 	/** Persist the current phase as a branch-correct, LLM-invisible custom entry. */
 	function persistPhase(): void {
 		pi.appendEntry(HARNESS.phaseEntryType, { phase: machine.current });
+		syncSessionState();
+	}
+
+	/** Sync in-memory harness state to .tokyo/sessions/current/state.json so it
+	 * survives pi session compaction/restart (decouples tokyo from pi sessions). */
+	function syncSessionState(): void {
+		writeSessionState(state, {
+			phase: machine.current,
+			planMode,
+			autoMode,
+			cont,
+		}).catch(() => {});
 	}
 
 	/** Symlink/remove tokyo agents to/from project .pi/agent/agents/ for pi agent discovery.
@@ -466,6 +479,25 @@ export default function harness(pi: ExtensionAPI) {
 		planMode = "consensus";
 		cont = freshContinuationState();
 		autoMode = false;
+
+		// Load tokyo state from its OWN session file (.tokyo/sessions/current/state.json),
+		// NOT from pi session entries. This decouples tokyo from pi sessions so the
+		// harness survives compaction, restart, and new pi sessions.
+		try {
+			const sess = await readSessionState(state);
+			if (sess) {
+				machine.restore(sess.phase);
+				planMode = sess.planMode;
+				autoMode = sess.autoMode;
+				cont = sess.cont;
+				restoredPhase = sess.phase;
+				restoredActive = sess.phase !== "IDLE";
+				// Fall through to pi session scan for branch-correct goals/events snapshots only.
+			}
+		} catch { /* session file not found or corrupt — fall through to pi session fallback */ }
+
+		// Pi session JSONL scan: only for goals/events branch snapshots. Phase/planMode/autoMode
+		// are now owned by tokyo's session state above; the pi session scan is a fallback.
 		// getBranch() walks leaf->root for THIS branch only; last write wins per kind.
 		for (const entry of ctx.sessionManager.getBranch()) {
 			if (entry.type !== "custom") continue;
@@ -578,6 +610,7 @@ export default function harness(pi: ExtensionAPI) {
 			else if (arg === "off") autoMode = false;
 			else autoMode = !autoMode;
 			pi.appendEntry(HARNESS.autoModeEntryType, { autoMode });
+			syncSessionState();
 			syncActiveTools();
 			syncStatus(ctx);
 			ctx.ui.notify(
@@ -853,13 +886,21 @@ export default function harness(pi: ExtensionAPI) {
 		// and omit the `model` field; the harness injects the right category model.
 		// "current" is the only allowed model value (parent's model).
 		if (event.toolName === "spawn_subagents") {
-			const tasks = (event.input as { tasks?: Array<{ model?: unknown; agent?: unknown }> } | undefined)?.tasks ?? [];
+			const tasks = (event.input as { tasks?: Array<{ model?: unknown; agent?: unknown; excludeTools?: unknown[] }> } | undefined)?.tasks ?? [];
 			for (const t of tasks) {
 				if (t.model !== undefined && t.model !== null && t.model !== "current") {
 					return {
 						block: true,
 						reason: `Do NOT set a model directly in spawn_subagents. Use agent names only (e.g. agent:"tokyo-reviewer"). The tokyo harness resolves the correct model from the agent's category in ~/.tokyo/config.json. Remove the "model" field or set it to "current".`,
 					};
+				}
+			}
+			// Phase gate: in read-only phases, force subagents to also be read-only.
+			if (!machine.policy().mutationsAllowed) {
+				const MUTATION_TOOLS = ["write", "edit", "apply_patch"];
+				for (const t of tasks) {
+					const existing = (t.excludeTools ?? []) as string[];
+					(t as any).excludeTools = [...new Set([...existing, ...MUTATION_TOOLS])];
 				}
 			}
 		}
@@ -928,7 +969,18 @@ export default function harness(pi: ExtensionAPI) {
 			// AUTO-ADVANCE: in autonomous mode, when EXECUTE finishes because all goals
 			// are settled, don't just stop — drive the workflow forward to VERIFY so an
 			// unattended run completes EXECUTE→VERIFY→REVIEW→DONE on its own.
+			// But FIRST: check that completed goals actually have verification evidence
+			// (not just self-declared). No evidence → nudge to run tokyo_verify instead.
 			if (autoMode && machine.current === "EXECUTE" && decision.reason === "all goals settled") {
+				const completedGoals = goals.goals.filter((g: any) => g.status === "complete");
+				const evidenceOk = completedGoals.length > 0 &&
+					completedGoals.every((g: any) => g.receipt?.evidence?.some((e: any) => e.status === "passed" || e.status === "verified"));
+				if (!evidenceOk) {
+					const nudge = "All goals settled but some lack verified evidence. Run tokyo_verify (build/tests + reviewer verdict) for each completed goal before advancing to VERIFY.";
+					if (ctx.isIdle()) pi.sendUserMessage(nudge);
+					else pi.sendUserMessage(nudge, { deliverAs: "followUp" });
+					return;
+				}
 				const res = await requestTransition("VERIFY", ctx);
 				if (res.ok) {
 					syncStatus(ctx);
