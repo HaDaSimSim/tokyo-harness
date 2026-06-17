@@ -174,9 +174,11 @@ export function makeTeamTool(hooks: TeamToolHooks): ToolDefinition<typeof TeamPa
 						const { OrchestratorClient } = await import("./orchestrator-client.ts");
 						const orchClient = new OrchestratorClient(process.cwd());
 						if (await orchClient.probe()) {
+						const { resolveWorkerModel, loadUserConfig } = await import("../tokyo-config.ts");
+						const tokyoCfg = loadUserConfig(process.cwd());
 							const specs = roster.filter((w) => w.prompt).map((w) => ({
 								id: w.id,
-								model: w.model ?? defaultModelFor(w.id) ?? "relay/claude-opus-4.8",
+								model: w.model ?? resolveWorkerModel(tokyoCfg, w.id) ?? "relay/claude-opus-4.8",
 								system_prompt: w.prompt ?? "",
 							}));
 							try {

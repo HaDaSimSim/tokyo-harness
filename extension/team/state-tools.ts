@@ -564,6 +564,18 @@ export function makeCompleteTool(hooks: CompleteHooks): ToolDefinition<typeof Co
 				return failComplete(goal.id, "evidence must be an array of {kind, status, detail} items");
 			}
 
+			// TDD ENFORCEMENT: code goals require at least one test command evidence.
+			const hasTestEvidence = evidence.some(
+				(e) => e.kind === "command" && /test|spec|jest|vitest|bun test|cargo test|pytest|mocha|rspec/i.test(e.detail),
+			);
+			const hasBuildEvidence = evidence.some(
+				(e) => e.kind === "command" && /build|compile|tsc|cargo build|go build|make/i.test(e.detail),
+			);
+			const hasReviewEvidence = evidence.some(
+				(e) => e.kind === "inspection" && /review(er|ed)?|architect/i.test(e.detail),
+			);
+			const isNonCodeGoal = /doc(s|umentation)|readme|config|setup|infra/i.test(goal.objective);
+
 			// OMO ORACLE GATE (universal): every goal completion needs at least one
 			// inspected-by-independent-reviewer evidence with status:'verified' — not
 			// just any inspection. Self-declared completion without third-party sign-off
@@ -580,18 +592,6 @@ export function makeCompleteTool(hooks: CompleteHooks): ToolDefinition<typeof Co
 					"(Non-code goals like docs/config may skip this gate.)",
 				);
 			}
-
-			// TDD ENFORCEMENT: code goals require at least one test command evidence.
-			const hasTestEvidence = evidence.some(
-				(e) => e.kind === "command" && /test|spec|jest|vitest|bun test|cargo test|pytest|mocha|rspec/i.test(e.detail),
-			);
-			const hasBuildEvidence = evidence.some(
-				(e) => e.kind === "command" && /build|compile|tsc|cargo build|go build|make/i.test(e.detail),
-			);
-			const hasReviewEvidence = evidence.some(
-				(e) => e.kind === "inspection" && /review(er|ed)?|architect/i.test(e.detail),
-			);
-			const isNonCodeGoal = /doc(s|umentation)|readme|config|setup|infra/i.test(goal.objective);
 
 			if (!hasTestEvidence && !isNonCodeGoal) {
 				return failComplete(goal.id,

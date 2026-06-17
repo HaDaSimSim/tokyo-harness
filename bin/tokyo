@@ -59,7 +59,7 @@ SOCK="$PROJECT_DIR/.tokyo/orchestrator.sock"
 ORCH_PID=""
 
 # Stable, project-scoped session name. Sanitize to tmux-safe chars.
-SESSION="tokyo-$(basename "$PROJECT_DIR" | tr -c 'A-Za-z0-9_-' '-')"
+SESSION="tokyo-$(basename "$PROJECT_DIR" | sed 's/[^a-zA-Z0-9]/-/g; s/--*/-/g; s/^-//; s/-$//' | cut -c1-20)"
 
 # If a session with this name already exists, just attach to it (resume the team).
 if tmux has-session -t "$SESSION" 2>/dev/null; then
