@@ -42,6 +42,8 @@ type IpcResponse =
 			result?: string | null;
 			error?: string | null;
 	  }
+	| { type: "paused"; snapshot_path: string }
+	| { type: "worker_restored"; id: string }
 	| { type: "error"; message: string };
 
 export interface HyperplanProgress {
@@ -206,6 +208,22 @@ export class OrchestratorClient {
 	async stopTeam(): Promise<void> {
 		const resp = await this.send({ type: "stop_team" });
 		if (resp.type === "error") throw new Error(resp.message);
+	}
+
+	/**
+	 * Trigger a graceful pause: the orchestrator snapshots the live team (with
+	 * prime_messages for resume), kills all worker tmux windows, then exits.
+	 * Called from the Lead's session_shutdown hook so a normal /exit or Ctrl+D
+	 * turns into a clean pause instead of leaving zombie workers behind.
+	 *
+	 * Returns the snapshot path on success. Throws on transport errors
+	 * (e.g. orchestrator already gone) — callers should treat that as success.
+	 */
+	async pause(): Promise<string> {
+		const resp = await this.send({ type: "pause" });
+		if (resp.type === "error") throw new Error(resp.message);
+		if (resp.type !== "paused") throw new Error(`Unexpected response: ${resp.type}`);
+		return resp.snapshot_path;
 	}
 
 	async status(): Promise<WorkerStatus[]> {

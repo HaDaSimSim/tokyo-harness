@@ -9,8 +9,9 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use crate::ipc::{IpcCommand, IpcMessage, IpcResponse, WorkerResult, WorkerSpec, WorkerStatus};
+use crate::snapshot::{self, OrchestratorSnapshot, WorkerSnapshot};
 use crate::tmux_worker::TmuxWorker;
-use tokio::sync::{mpsc, Mutex};
+use tokio::sync::{mpsc, Mutex, Notify};
 
 /// Shared worker pool: id -> live tmux-backed pi worker.
 pub type WorkerPool = Arc<Mutex<HashMap<String, TmuxWorker>>>;
@@ -42,6 +43,9 @@ pub struct Orchestrator {
     pub workers: WorkerPool,
     pub jobs: JobRegistry,
     env: WorkerEnv,
+    /// Notified by the Pause handler to make `run()` return. The caller (main.rs
+    /// Serve/Start handler) then cleans up the socket + pid lock and exits.
+    shutdown: Arc<Notify>,
 }
 
 impl Orchestrator {
@@ -50,20 +54,36 @@ impl Orchestrator {
             workers: Arc::new(Mutex::new(HashMap::new())),
             jobs: Arc::new(Mutex::new(HashMap::new())),
             env: WorkerEnv { tmux_session, cwd, default_model: default_model.to_string() },
+            shutdown: Arc::new(Notify::new()),
         }
     }
 
     /// Run the orchestrator loop. Each command is spawned into its own task so
-    /// long-running work (hyperplan rounds) doesn't block status polls.
+    /// long-running work (hyperplan rounds) doesn't block status polls. The
+    /// shutdown Notify breaks the loop when the Pause handler fires it.
     pub async fn run(&mut self, mut rx: mpsc::Receiver<IpcMessage>) {
-        while let Some(msg) = rx.recv().await {
-            let workers = self.workers.clone();
-            let jobs = self.jobs.clone();
-            let env = self.env.clone();
-            tokio::spawn(async move {
-                let response = handle(workers, jobs, env, msg.command).await;
-                let _ = msg.respond.send(response);
-            });
+        loop {
+            tokio::select! {
+                msg = rx.recv() => {
+                    match msg {
+                        Some(msg) => {
+                            let workers = self.workers.clone();
+                            let jobs = self.jobs.clone();
+                            let env = self.env.clone();
+                            let shutdown = self.shutdown.clone();
+                            tokio::spawn(async move {
+                                let response = handle(workers, jobs, env, shutdown, msg.command).await;
+                                let _ = msg.respond.send(response);
+                            });
+                        }
+                        None => break,
+                    }
+                }
+                _ = self.shutdown.notified() => {
+                    eprintln!("[orchestrator] shutdown signaled — exiting run loop");
+                    break;
+                }
+            }
         }
     }
 }
@@ -72,6 +92,7 @@ async fn handle(
     workers: WorkerPool,
     jobs: JobRegistry,
     env: WorkerEnv,
+    shutdown: Arc<Notify>,
     cmd: IpcCommand,
 ) -> IpcResponse {
     match cmd {
@@ -104,6 +125,12 @@ async fn handle(
         }
         IpcCommand::HyperplanWait { job_id } => {
             hyperplan_wait(&jobs, &job_id).await
+        }
+        IpcCommand::Pause => {
+            pause(&workers, &env, shutdown).await
+        }
+        IpcCommand::RestoreWorker { id, model, prime_message } => {
+            restore_worker(&workers, &env, &id, &model, &prime_message).await
         }
     }
 }
@@ -246,6 +273,105 @@ async fn stop_all(workers: &WorkerPool) -> IpcResponse {
         worker.shutdown().await;
     }
     IpcResponse::Stopped
+}
+
+/// Graceful pause: snapshot the current team (with prime_messages for resume),
+/// kill all worker windows, then signal the run loop to exit. The caller
+/// (main.rs Serve/Start handler) cleans up the IPC socket + pid lock after
+/// run() returns.
+///
+/// Order matters:
+///  1. Snapshot FIRST — even if a kill_window fails, the team roster is saved.
+///  2. Kill windows AFTER snapshot — so resume knows the exact prime to replay.
+///  3. Notify shutdown LAST — so the response reaches the client before the
+///     orchestrator tears down the listener.
+async fn pause(
+    workers: &WorkerPool,
+    env: &WorkerEnv,
+    shutdown: Arc<Notify>,
+) -> IpcResponse {
+    let worker_snapshots: Vec<WorkerSnapshot> = {
+        let pool = workers.lock().await;
+        pool.iter()
+            .map(|(id, w)| WorkerSnapshot {
+                id: id.clone(),
+                model: w.model().to_string(),
+                prime_message: w.prime_message().map(|s| s.to_string()),
+            })
+            .collect()
+    };
+
+    let snap = OrchestratorSnapshot {
+        model: env.default_model.clone(),
+        extension: None,
+        session_dir: Some(env.cwd.join(".tokyo").join("sessions").to_string_lossy().into_owned()),
+        workers: worker_snapshots,
+        paused_at: std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs().to_string())
+            .unwrap_or_default(),
+        phase: None,
+    };
+
+    let snap_path = match snapshot::save_snapshot(&env.cwd, &snap) {
+        Ok(p) => p,
+        Err(e) => {
+            return IpcResponse::Error {
+                message: format!("pause: failed to save snapshot: {e}"),
+            };
+        }
+    };
+    eprintln!("[orchestrator] pause: snapshot saved ({} workers) at {}", snap.workers.len(), snap_path.display());
+
+    let taken: HashMap<String, TmuxWorker> = std::mem::take(&mut *workers.lock().await);
+    for (id, worker) in taken {
+        worker.shutdown().await;
+        eprintln!("[orchestrator] pause: killed worker {id}");
+    }
+
+    shutdown.notify_one();
+
+    IpcResponse::Paused {
+        snapshot_path: snap_path.to_string_lossy().into_owned(),
+    }
+}
+
+/// Recreate a single worker from a snapshot entry. Spawns a fresh tmux window
+/// (the old one was killed by pause) and primes it with the saved message, so
+/// the worker's role identity survives the pause/resume cycle.
+async fn restore_worker(
+    workers: &WorkerPool,
+    env: &WorkerEnv,
+    id: &str,
+    model: &str,
+    prime_message: &str,
+) -> IpcResponse {
+    let session = match &env.tmux_session {
+        Some(s) => s.clone(),
+        None => {
+            return IpcResponse::Error {
+                message: "no tmux session — cannot restore workers. Use the tokyo launcher.".to_string(),
+            };
+        }
+    };
+
+    if let Some(old) = workers.lock().await.remove(id) {
+        old.shutdown().await;
+    }
+
+    let mut w = match TmuxWorker::spawn(&session, id, model, &env.cwd, None).await {
+        Ok(w) => w,
+        Err(e) => return IpcResponse::Error { message: format!("restore {id}: spawn failed: {e}") },
+    };
+
+    if let Err(e) = w.prompt(prime_message).await {
+        return IpcResponse::Error { message: format!("restore {id}: prime failed: {e}") };
+    }
+    w.set_prime_message(prime_message);
+
+    workers.lock().await.insert(id.to_string(), w);
+    eprintln!("[orchestrator] restored worker {id}");
+    IpcResponse::WorkerRestored { id: id.to_string() }
 }
 
 async fn status(workers: &WorkerPool) -> IpcResponse {

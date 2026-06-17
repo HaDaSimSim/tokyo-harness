@@ -380,60 +380,52 @@ async fn main() -> anyhow::Result<()> {
             };
             let sock_path = ipc::default_socket_path(&cwd);
 
-            // Read current orchestrator state via IPC
             if !sock_path.exists() {
                 anyhow::bail!("No orchestrator running (no socket at {})", sock_path.display());
             }
 
-            // Send status query to get worker list
             println!("[tokyo] pausing...");
 
-            // Query orchestrator for live worker state
-            let workers_snapshot = {
-                use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
-                use tokio::net::UnixStream;
-                match UnixStream::connect(&sock_path).await {
-                    Ok(stream) => {
-                        let (reader, mut writer) = stream.into_split();
-                        let cmd = serde_json::json!({"type": "status"});
-                        let mut line = serde_json::to_string(&cmd).unwrap();
-                        line.push('\n');
-                        let _ = writer.write_all(line.as_bytes()).await;
-                        let _ = writer.flush().await;
-                        let mut buf_reader = tokio::io::BufReader::new(reader);
-                        let mut resp_line = String::new();
-                        let _ = buf_reader.read_line(&mut resp_line).await;
-                        // Parse status response to get worker IDs
-                        if let Ok(obj) = serde_json::from_str::<serde_json::Value>(&resp_line) {
-                            if let Some(workers) = obj.get("workers").and_then(|w| w.as_array()) {
-                                workers.iter().filter_map(|w| {
-                                    let id = w.get("id")?.as_str()?.to_string();
-                                    Some(snapshot::WorkerSnapshot { id, model: "relay/claude-sonnet-4.5".into(), prime_message: None })
-                                }).collect::<Vec<_>>()
-                            } else { vec![] }
-                        } else { vec![] }
-                    }
-                    Err(_) => vec![],
+            // Send the IPC pause command. The orchestrator handles snapshot save +
+            // worker kills + daemon exit in one shot, so this is now a thin client.
+            use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
+            use tokio::net::UnixStream;
+            let stream = UnixStream::connect(&sock_path).await?;
+            let (reader, mut writer) = stream.into_split();
+            let cmd = serde_json::json!({"type": "pause"});
+            let mut line = serde_json::to_string(&cmd).unwrap();
+            line.push('\n');
+            writer.write_all(line.as_bytes()).await?;
+            writer.flush().await?;
+            drop(writer);
+
+            let mut buf_reader = tokio::io::BufReader::new(reader);
+            let mut resp_line = String::new();
+            buf_reader.read_line(&mut resp_line).await?;
+
+            let resp: serde_json::Value = serde_json::from_str(&resp_line)
+                .map_err(|e| anyhow::anyhow!("invalid pause response: {e} (raw: {resp_line:?})"))?;
+
+            match resp.get("type").and_then(|t| t.as_str()) {
+                Some("paused") => {
+                    let path = resp.get("snapshot_path").and_then(|p| p.as_str()).unwrap_or("<unknown>");
+                    println!("[tokyo] snapshot saved at {path}");
                 }
-            };
+                Some("error") => {
+                    let msg = resp.get("message").and_then(|m| m.as_str()).unwrap_or("(no message)");
+                    anyhow::bail!("pause failed: {msg}");
+                }
+                other => anyhow::bail!("unexpected pause response: {other:?}"),
+            }
 
-            // Build snapshot
-            let snap = snapshot::OrchestratorSnapshot {
-                model: "relay/claude-sonnet-4.5".to_string(),
-                extension: None,
-                session_dir: None,
-                workers: workers_snapshot,
-                paused_at: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs().to_string()).unwrap_or_default(),
-                phase: None,
-            };
-
-            // For now, just save and kill the orchestrator
-            let path = snapshot::save_snapshot(&cwd, &snap)?;
-            println!("[tokyo] snapshot saved to {}", path.display());
-
-            // Kill the orchestrator by removing its socket (it will notice)
-            let _ = std::fs::remove_file(&sock_path);
-            let _ = std::fs::remove_file(sock_path.with_extension("pid"));
+            // The orchestrator tears down the listener and exits shortly after
+            // sending the response. Poll briefly for the socket to vanish so the
+            // user gets immediate feedback (otherwise they'd have to wait for the
+            // OS to GC the socket file).
+            for _ in 0..50 {
+                if !sock_path.exists() { break; }
+                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            }
             println!("[tokyo] orchestrator stopped. Resume with 'tokyo resume'.");
         }
         Cli::Resume { project_dir, model } => {
@@ -447,70 +439,206 @@ async fn main() -> anyhow::Result<()> {
             }
 
             let snap = snapshot::load_snapshot(&cwd)?;
-            println!("[tokyo] resuming from snapshot (paused at {})", snap.paused_at);
-
             let model = model.unwrap_or(snap.model);
-            let extension = snap.extension;
+            println!("[tokyo] resuming from snapshot ({} workers, paused at {})", snap.workers.len(), snap.paused_at);
 
-            // Re-launch orchestrator (same as `tokyo start`). Legacy RPC Lead path:
-            // no tmux session, so team workers are not restored here.
+            // Must match bin/tokyo's session-name formula so attach finds the right one.
+            let session = tmux_session_name(&cwd);
             let sock_path = ipc::default_socket_path(&cwd);
-            let ipc_rx = ipc::start_ipc_server(&sock_path).await?;
-            let mut orch = orchestrator::Orchestrator::new(&model, None, cwd.clone());
+            let pid_path = sock_path.with_extension("pid");
 
-            // NOTE: tmux-backed workers live in the tmux session, not in a snapshot.
-            // The legacy snapshot worker list is no longer re-spawned here.
-            if !snap.workers.is_empty() {
-                println!("  (skipping {} snapshot workers — tmux workers are restored via the tmux session)", snap.workers.len());
-            }
-
-            // Start Lead
-            let ext = extension.as_deref();
-            let sess_dir = snap.session_dir.as_deref();
-            let mut lead = rpc::RpcWorker::spawn(&model, ext, sess_dir).await?;
-
-            snapshot::clear_snapshot(&cwd)?;
-            println!("[tokyo] resumed. {} workers restored.", snap.workers.len());
-
-            let orch_handle = tokio::spawn(async move {
-                orch.run(ipc_rx).await;
-            });
-
-            // Interactive loop
-            use tokio::io::AsyncBufReadExt;
-            let stream_cb = |delta: &str| {
-                use std::io::Write;
-                print!("{delta}");
-                std::io::stdout().flush().ok();
-            };
-            let stdin = tokio::io::BufReader::new(tokio::io::stdin());
-            let mut lines = stdin.lines();
-            println!("[tokyo] lead ready. Type a message (Ctrl+D to quit):");
-
-            loop {
-                tokio::select! {
-                    line = lines.next_line() => {
-                        match line? {
-                            Some(input) if !input.trim().is_empty() => {
-                                lead.prompt_streaming(input.trim(), Some(stream_cb)).await?;
-                                println!();
-                            }
-                            Some(_) => continue,
-                            None => break,
-                        }
-                    }
-                    _ = tokio::signal::ctrl_c() => {
-                        println!("\n[tokyo] shutting down...");
-                        break;
-                    }
+            // 1. If a previous orchestrator is somehow still running, gracefully
+            //    pause it first so we don't fight over the socket / pid lock.
+            if sock_path.exists() {
+                println!("[tokyo]   existing orchestrator found — pausing it first");
+                send_ipc_pause(&sock_path).await.ok();
+                for _ in 0..50 {
+                    if !sock_path.exists() { break; }
+                    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
                 }
             }
 
-            lead.shutdown().await?;
-            let _ = std::fs::remove_file(&sock_path);
-            let _ = std::fs::remove_file(sock_path.with_extension("pid"));
-            orch_handle.abort();
+            // 2. Clean any stale tmux session. Workers from a prior session are
+            //    gone (paused killed them) and the tmux session may have leftover
+            //    windows. We rebuild from scratch.
+            kill_tmux_session(&session);
+            std::fs::create_dir_all(cwd.join(".tokyo").join("sessions")).ok();
+
+            // 3. Create the tmux session with the lead already running in window 0.
+            let ext_path = resolve_extension_path();
+            let sess_dir = cwd.join(".tokyo").join("sessions");
+            let lead_cmd = build_lead_cmd(&session, &sess_dir, &ext_path);
+            let status = std::process::Command::new("tmux")
+                .args([
+                    "new-session", "-d", "-s", &session,
+                    "-n", "lead",
+                    "-c", &cwd.to_string_lossy(),
+                    &lead_cmd,
+                ])
+                .status()?;
+            if !status.success() {
+                anyhow::bail!("failed to create tmux session {session}");
+            }
+
+            // 4. Spawn the orchestrator as a DETACHED background process. It
+            //    outlives `tokyo resume` so the user can keep using the session
+            //    after detaching. The orchestrator is just `tokyo serve`; same
+            //    path the launcher uses on a fresh start.
+            let orch_path = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("tokyo"));
+            std::process::Command::new(&orch_path)
+                .args([
+                    "serve",
+                    "--model", &model,
+                    "--project-dir", &cwd.to_string_lossy(),
+                    "--tmux-session", &session,
+                ])
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .spawn()?;
+
+            // 5. Wait for the orchestrator's socket (PID lock is also a good signal).
+            for _ in 0..100 {
+                if sock_path.exists() && pid_path.exists() { break; }
+                tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+            }
+            if !sock_path.exists() {
+                anyhow::bail!("orchestrator failed to start (no socket at {})", sock_path.display());
+            }
+            println!("[tokyo]   orchestrator ready");
+
+            // 6. Restore each saved worker via the new RestoreWorker IPC. This
+            //    spawns a fresh tmux window per worker and re-primes it with the
+            //    saved prime_message so role identity survives the pause.
+            for w in &snap.workers {
+                let prime = match &w.prime_message {
+                    Some(p) => p.clone(),
+                    None => {
+                        println!("[tokyo]   skipping {} (no prime_message — older snapshot)", w.id);
+                        continue;
+                    }
+                };
+                let resp = send_ipc(&sock_path, serde_json::json!({
+                    "type": "restore_worker",
+                    "id": w.id,
+                    "model": w.model,
+                    "prime_message": prime,
+                })).await?;
+                if resp.get("type") == Some(&serde_json::Value::String("error".to_string())) {
+                    let msg = resp.get("message").and_then(|m| m.as_str()).unwrap_or("(no message)");
+                    eprintln!("[tokyo]   restore {} failed: {msg}", w.id);
+                } else {
+                    println!("[tokyo]   restored worker {}", w.id);
+                }
+            }
+
+            // 7. Clear snapshot once everything is wired up. If restore fails,
+            //    leaving the snapshot lets the user retry without re-pausing.
+            snapshot::clear_snapshot(&cwd)?;
+            println!("[tokyo] resumed. Attaching to {session}...");
+
+            // 8. Attach. On detach/exit, leave the orchestrator + tmux session
+            //    alive — the user explicitly pauses when they want to stop.
+            //    (Different from bin/tokyo, which always kills the session.)
+            let _ = std::process::Command::new("tmux")
+                .args(["attach", "-t", &session])
+                .status();
         }
+    }
+    Ok(())
+}
+
+// ─── resume helpers ──────────────────────────────────────────────────────────
+
+use std::path::PathBuf;
+use std::process::Command;
+
+/// Compute the tmux session name for a project dir. MUST match bin/tokyo's
+/// `SESSION="tokyo-..."` formula exactly, or attach will fail to find the
+/// session we just created.
+fn tmux_session_name(cwd: &std::path::Path) -> String {
+    let base = cwd
+        .file_name()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "project".to_string());
+    let sanitized: String = base
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+        .collect::<String>()
+        .split('-')
+        .filter(|s| !s.is_empty())
+        .collect::<Vec<_>>()
+        .join("-");
+    let trimmed: String = sanitized.chars().take(20).collect();
+    format!("tokyo-{trimmed}")
+}
+
+/// Best-effort: if a tmux session with this name exists, kill it. Used by resume
+/// to clear any leftover windows (workers from a prior session are dead but the
+/// windows may still be visible with `remain-on-exit on`).
+fn kill_tmux_session(session: &str) {
+    let _ = Command::new("tmux")
+        .args(["kill-session", "-t", session])
+        .status();
+}
+
+/// Resolve the extension path: CLI flag > TOKYO_EXTENSION env > default
+/// ~/projects/tokyo-harness/extension/index.ts. Mirrors bin/tokyo's lookup.
+fn resolve_extension_path() -> PathBuf {
+    if let Ok(p) = std::env::var("TOKYO_EXTENSION") {
+        return PathBuf::from(p);
+    }
+    let home = dirs::home_dir().unwrap_or_default();
+    home.join("projects/tokyo-harness/extension/index.ts")
+}
+
+/// Build the lead's tmux command. Mirrors bin/tokyo's LEAD_ENV/LEAD_CMD.
+fn build_lead_cmd(session: &str, sess_dir: &std::path::Path, ext_path: &std::path::Path) -> String {
+    let pi = crate::rpc::pi_bin();
+    let sess = sess_dir.to_string_lossy();
+    let ext = ext_path.to_string_lossy();
+    format!(
+        "TOKYO_AUTO=1 TOKYO_TMUX_SESSION={} {} --session-dir {} -e {}",
+        shell_quote(session),
+        shell_quote(&pi),
+        shell_quote(&sess),
+        shell_quote(&ext),
+    )
+}
+
+/// Minimal POSIX shell single-quote escaping.
+fn shell_quote(s: &str) -> String {
+    format!("'{}'", s.replace('\'', "'\\''"))
+}
+
+/// Connect to the orchestrator socket and send one command, returning the parsed
+/// JSON response. Used by `tokyo resume` to invoke Pause/RestoreWorker against
+/// the running orchestrator.
+async fn send_ipc(sock_path: &std::path::Path, command: serde_json::Value) -> anyhow::Result<serde_json::Value> {
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
+    use tokio::net::UnixStream;
+    let stream = UnixStream::connect(sock_path).await?;
+    let (reader, mut writer) = stream.into_split();
+    let mut line = serde_json::to_string(&command)?;
+    line.push('\n');
+    writer.write_all(line.as_bytes()).await?;
+    writer.flush().await?;
+    drop(writer);
+    let mut buf_reader = tokio::io::BufReader::new(reader);
+    let mut resp_line = String::new();
+    buf_reader.read_line(&mut resp_line).await?;
+    let resp: serde_json::Value = serde_json::from_str(resp_line.trim())
+        .map_err(|e| anyhow::anyhow!("invalid IPC response: {e} (raw: {resp_line:?})"))?;
+    Ok(resp)
+}
+
+/// Convenience: send a pause command, ignore errors (used when we just want the
+/// orchestrator to shut down before we take over).
+async fn send_ipc_pause(sock_path: &std::path::Path) -> anyhow::Result<()> {
+    let resp = send_ipc(sock_path, serde_json::json!({"type": "pause"})).await?;
+    if resp.get("type") == Some(&serde_json::Value::String("error".to_string())) {
+        let msg = resp.get("message").and_then(|m| m.as_str()).unwrap_or("(no message)");
+        anyhow::bail!("pause IPC failed: {msg}");
     }
     Ok(())
 }

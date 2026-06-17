@@ -112,13 +112,24 @@ export interface TeamToolHooks {
 const defaultModelFor = (id: string): string | undefined => getRoleAgent(id)?.model;
 
 /**
- * Teardown: stop workers via orchestrator IPC if available.
- * Called from session_shutdown so workers don't outlive the session.
+ * Teardown: pause the orchestrator (snapshot + kill workers + exit) when the
+ * Lead's session ends, so a normal /exit or Ctrl+D turns into a clean pause
+ * instead of leaving zombie worker windows behind. Falls back to stopTeam if
+ * the orchestrator is unresponsive (e.g. already gone) — best-effort cleanup.
+ *
+ * Called from session_shutdown.
  */
 export function teardownAllTeams(): void {
 	import("./orchestrator-client.ts").then(({ OrchestratorClient }) => {
 		const oc = new OrchestratorClient(process.cwd());
-		if (oc.isAvailable()) oc.stopTeam().catch(() => {});
+		if (!oc.isAvailable()) return;
+		// Try a graceful pause first. This saves a snapshot the user can resume
+		// from, and kills the worker tmux windows so they don't linger.
+		oc.pause().catch(() => {
+			// Pause failed (orchestrator may be shutting down or socket died).
+			// Fall back to a hard stop so workers still get killed.
+			oc.stopTeam().catch(() => {});
+		});
 	}).catch(() => {});
 }
 
@@ -178,7 +189,7 @@ export function makeTeamTool(hooks: TeamToolHooks): ToolDefinition<typeof TeamPa
 							const tokyoCfg = loadUserConfig(process.cwd());
 							const specs = roster.filter((w) => w.prompt).map((w) => ({
 								id: w.id,
-								model: w.model ?? resolveWorkerModel(tokyoCfg, w.id) ?? "relay/claude-opus-4.8",
+								model: w.model ?? resolveWorkerModel(tokyoCfg, w.id),
 								system_prompt: w.prompt ?? "",
 							}));
 							try {

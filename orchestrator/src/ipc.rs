@@ -58,6 +58,17 @@ pub enum IpcCommand {
     HyperplanWait {
         job_id: String,
     },
+    /// Graceful pause: save orchestrator snapshot, kill all workers, then exit.
+    /// Triggered automatically when the lead quits (extension's session_shutdown
+    /// hook) or when the lead's tmux pane dies (bin/tokyo safety net).
+    Pause,
+    /// Recreate a single worker from a snapshot entry. Used by `tokyo resume` to
+    /// rehydrate the team after a pause killed the worker tmux windows.
+    RestoreWorker {
+        id: String,
+        model: String,
+        prime_message: String,
+    },
 }
 
 fn default_merge_strategy() -> String { "no-ff".to_string() }
@@ -95,6 +106,10 @@ pub enum IpcResponse {
         error: Option<String>,
     },
     Error { message: String },
+    /// Pause completed: snapshot saved, workers killed, daemon about to exit.
+    Paused { snapshot_path: String },
+    /// Worker recreated from a snapshot entry.
+    WorkerRestored { id: String },
 }
 
 #[derive(Debug, Serialize)]

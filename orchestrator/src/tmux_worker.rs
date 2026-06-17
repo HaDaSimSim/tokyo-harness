@@ -190,6 +190,18 @@ impl TmuxWorker {
         self.prime_message = Some(msg.to_string());
     }
 
+    /// Read-only view of the worker's model. Used by the pause handler to build
+    /// a snapshot without exposing the private field.
+    pub fn model(&self) -> &str {
+        &self.model
+    }
+
+    /// Read-only view of the worker's prime message (None if never primed).
+    /// Used by the pause handler to build a restorable snapshot.
+    pub fn prime_message(&self) -> Option<&str> {
+        self.prime_message.as_deref()
+    }
+
     /// Shut down the worker: kill its tmux window.
     pub async fn shutdown(&self) {
         let _ = Command::new("tmux")

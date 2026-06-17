@@ -118,6 +118,22 @@ done
 tmux new-session -d -s "$SESSION" -n lead "$LEAD_CMD"
 tmux set-option -t "$SESSION" mouse on 2>/dev/null || true
 
+# Safety net for SIGKILL / terminal-closed paths: when the Lead's pane dies,
+# the extension's session_shutdown hook never fires, so we can't rely on the
+# extension to send the IPC pause. Watch pane-died and, if it was the Lead
+# window, run `tokyo pause` ourselves. The pause kills the worker windows
+# (orchestrator's pause handler calls kill-window), which leaves the session
+# empty and triggers tmux's auto-destroy — bin/tokyo's `tmux attach` returns,
+# the cleanup trap runs, and we're back to a clean state.
+#
+# Quoting layers (deeply nested, sorry):
+#   bash → tmux set-hook → tmux if-shell → tmux run-shell → /bin/sh -c → tokyo
+# printf %q handles the project dir so paths with spaces/quotes stay safe.
+PROJECT_DIR_Q=$(printf %q "$PROJECT_DIR")
+HOOK_ACTION="run-shell \"cd $PROJECT_DIR_Q && tokyo pause\""
+HOOK_CMD="if-shell -F '#{==:#{window_name},lead}' '$HOOK_ACTION'"
+tmux set-hook -t "$SESSION" pane-died "$HOOK_CMD" 2>/dev/null || true
+
 # Attach in the foreground. When you detach or the Lead exits, we fall through
 # to cleanup (orchestrator shutdown + socket removal).
 tmux attach -t "$SESSION"
