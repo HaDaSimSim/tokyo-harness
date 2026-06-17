@@ -63,6 +63,7 @@ const BUILTIN: TokyoUserConfig = {
 		skeptic: { category: "fast" },
 		validator: { category: "deep" },
 		researcher: { category: "deep" },
+		creative: { category: "creative" },
 	},
 	defaults: {
 		model: "relay/claude-opus-4.8",
