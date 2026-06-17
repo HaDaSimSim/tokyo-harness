@@ -66,9 +66,9 @@ const TEAM_ENABLED = true; // always on — orchestrator handles workers on-dema
 const CORE_TOKYO_TOOLS = ["tokyo_phase", "tokyo_ambiguity", "tokyo_spec_save", "tokyo_plan_save", "tokyo_goal", "tokyo_complete", "tokyo_verify", "tokyo_memory", "tokyo_notepad"];
 const TOKYO_TOOLS = [...CORE_TOKYO_TOOLS, "tokyo_team"];
 /** Tools available when a phase bars mutations (mirrors plan-mode's read-only set). */
-const READONLY_TOOLS = ["read", "bash", "grep", "find", "ls", "questionnaire", ...TOKYO_TOOLS];
+const READONLY_TOOLS = ["read", "bash", "grep", "find", "ls", "questionnaire", "spawn_subagents", ...TOKYO_TOOLS];
 /** Tools available when a phase allows mutations. */
-const FULL_TOOLS = ["read", "bash", "grep", "find", "ls", "questionnaire", ...MUTATION_TOOLS, ...TOKYO_TOOLS];
+const FULL_TOOLS = ["read", "bash", "grep", "find", "ls", "questionnaire", "spawn_subagents", ...MUTATION_TOOLS, ...TOKYO_TOOLS];
 /** EXECUTE tool set: same as FULL but WITHOUT questionnaire — EXECUTE is the
  * autonomous run phase and must never block waiting for user input (so it keeps
  * grinding while you're away). The model records autonomous choices in the
