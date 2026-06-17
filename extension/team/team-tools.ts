@@ -323,7 +323,7 @@ export function makeTeamTool(hooks: TeamToolHooks): ToolDefinition<typeof TeamPa
 									// Mark workers idle again now that the rounds are done.
 									try {
 										await co.setWorkersStatus((await co.readManifest())?.workers.map((w) => w.id) ?? [], "idle");
-										await hooks.onChange?.(ctx);
+										
 									} catch { /* best effort */ }
 									if (p.status === "done") {
 										hooks.notify?.(
