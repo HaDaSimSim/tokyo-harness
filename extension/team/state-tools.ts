@@ -206,7 +206,7 @@ export function makePlanSaveTool(hooks: PlanSaveHooks): ToolDefinition<typeof Pl
 				content: [
 					{
 						type: "text",
-						text: `Plan saved (pending approval): ${rel}\nsha256: ${checksum}\n\nPresent it to the user, then advance with tokyo_phase to EXECUTE to request consent.`,
+						text: `Plan saved (pending approval): ${rel}\nsha256: ${checksum}\n\n${params.plan.trim()}\n\n---\nPresent it to the user, then advance with tokyo_phase to EXECUTE to request consent.`,
 					},
 				],
 				details: { path: absPath, sha256: checksum, slug },
