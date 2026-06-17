@@ -1,0 +1,23 @@
+node_modules/
+*.log
+.DS_Store
+
+# pi package install dirs
+.pi/npm/
+.pi/sessions/
+
+# harness runtime state (created in target projects, never in this repo)
+.tokyo/
+
+# local env
+.env
+.env.*
+orchestrator/target/
+# Keep Cargo.lock for binary crates (reproducible builds)
+
+# research / reference docs (user-specific)
+research/
+agents/research/
+docs/research*
+skills/research/
+research/

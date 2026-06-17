@@ -1,0 +1,50 @@
+{
+  "name": "tokyo-harness",
+  "version": "0.1.0",
+  "description": "Tokyo — a workflow harness for pi: interview → plan → execute → verify, with strict gates, a durable ledger, evidence-gated completion, and a file-coordinated agent team.",
+  "type": "module",
+  "license": "MIT",
+  "keywords": [
+    "pi-package"
+  ],
+  "bin": {
+    "tokyo": "bin/tokyo"
+  },
+  "scripts": {
+    "test": "node --import tsx --test extension/**/*.test.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "zod": "^4.4.3"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*"
+  },
+  "pi": {
+    "extensions": [
+      "./extension/index.ts"
+    ],
+    "skills": [
+      "./skills"
+    ]
+  },
+  "files": [
+    "bin",
+    "extension/**/*.ts",
+    "!extension/**/*.test.ts",
+    "agents",
+    "skills",
+    "README.md"
+  ],
+  "devDependencies": {
+    "@commitlint/cli": "^21.0.2",
+    "@commitlint/config-conventional": "^21.0.2",
+    "@eslint/js": "^10.0.1",
+    "@types/node": "^25.9.2",
+    "eslint": "^10.5.0",
+    "lefthook": "^2.1.9",
+    "tsx": "^4.19.0",
+    "typescript": "^5.8.0",
+    "typescript-eslint": "^8.61.1"
+  }
+}

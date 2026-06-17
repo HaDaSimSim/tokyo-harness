@@ -1,0 +1,6 @@
+# tests + dev tooling — not shipped
+**/*.test.ts
+tsconfig.json
+docs/
+bun.lock
+.gitignore

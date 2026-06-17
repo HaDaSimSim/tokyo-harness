@@ -1,0 +1,20 @@
+pre-commit:
+  parallel: true
+  jobs:
+    - name: typecheck
+      run: ./node_modules/.bin/tsc --noEmit
+      glob: "*.{ts,tsx}"
+
+    - name: lint
+      run: ./node_modules/.bin/eslint {staged_files}
+      glob: "*.{ts,tsx}"
+
+commit-msg:
+  jobs:
+    - name: conventional-commits
+      run: ./node_modules/.bin/commitlint --edit {1}
+
+post-merge:
+  jobs:
+    - name: install-deps
+      run: pnpm install

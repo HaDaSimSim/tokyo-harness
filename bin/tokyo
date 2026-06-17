@@ -1,0 +1,126 @@
+#!/usr/bin/env bash
+#
+# tokyo — start a tmux session running the tokyo workflow harness, with the team
+# (when spawned) visible as live, interactive pi windows you can watch and type into.
+#
+#   tokyo                  # create the tokyo tmux session and attach
+#   tokyo "interview me"   # with an initial prompt
+#   tokyo --model ...      # any extra args are forwarded to the Lead pi
+#
+# Layout (one tmux session):
+#   window 0 "lead"   — your interactive pi TUI (the Lead). This is what you drive.
+#   window 1..N       — team workers, each a live interactive pi, spawned on demand
+#                       by the orchestrator. Switch with Ctrl-b <n> (or Ctrl-b w).
+#
+# The orchestrator runs as a background daemon (no window of its own). It spawns
+# worker windows, injects prompts via tmux, and reads their replies from each
+# worker's session .jsonl — so workers are real, visible pi sessions, driven like
+# subagents.
+#
+# tmux is REQUIRED. tokyo will not start without it.
+#
+# Env knobs:
+#   TOKYO_NO_DEV_EXT=1   skip the explicit -e (rely on auto-discovery)
+#   TOKYO_NO_ORCH=1      skip the orchestrator daemon (no team/hyperplan)
+#   TOKYO_ORCH_MODEL=... worker model (default relay/claude-opus-4.8)
+#
+# Setup: symlink this onto your PATH, e.g.
+#   ln -s "$PWD/bin/tokyo" ~/.local/bin/tokyo
+set -euo pipefail
+
+# ── tmux is a hard requirement ────────────────────────────────────────────────
+if ! command -v tmux >/dev/null 2>&1; then
+	echo "tokyo requires tmux, which is not installed or not on PATH." >&2
+	echo "Install it (e.g. 'brew install tmux') and try again." >&2
+	exit 1
+fi
+
+# Resolve this script's real location (follow symlinks) -> repo root -> extension.
+SOURCE="${BASH_SOURCE[0]}"
+while [ -h "$SOURCE" ]; do
+	DIR="$(cd -P "$(dirname "$SOURCE")" >/dev/null 2>&1 && pwd)"
+	SOURCE="$(readlink "$SOURCE")"
+	[[ "$SOURCE" != /* ]] && SOURCE="$DIR/$SOURCE"
+done
+BIN_DIR="$(cd -P "$(dirname "$SOURCE")" >/dev/null 2>&1 && pwd)"
+REPO_DIR="$(cd -P "$BIN_DIR/.." >/dev/null 2>&1 && pwd)"
+EXT="$REPO_DIR/extension/index.ts"
+
+# Locate the orchestrator binary: prefer release, then debug.
+ORCH=""
+for cand in \
+	"$REPO_DIR/orchestrator/target/release/tokyo" \
+	"$REPO_DIR/orchestrator/target/debug/tokyo"; do
+	if [ -x "$cand" ]; then ORCH="$cand"; break; fi
+done
+
+PROJECT_DIR="$(pwd)"
+SOCK="$PROJECT_DIR/.tokyo/orchestrator.sock"
+ORCH_PID=""
+
+# Stable, project-scoped session name. Sanitize to tmux-safe chars.
+SESSION="tokyo-$(basename "$PROJECT_DIR" | tr -c 'A-Za-z0-9_-' '-')"
+
+# If a session with this name already exists, just attach to it (resume the team).
+if tmux has-session -t "$SESSION" 2>/dev/null; then
+	echo "[tokyo] attaching to existing session '$SESSION'" >&2
+	exec tmux attach -t "$SESSION"
+fi
+
+cleanup() {
+	if [ -n "$ORCH_PID" ] && kill -0 "$ORCH_PID" 2>/dev/null; then
+		kill "$ORCH_PID" 2>/dev/null || true
+		wait "$ORCH_PID" 2>/dev/null || true
+	fi
+	rm -f "$SOCK" "${SOCK%.sock}.pid" 2>/dev/null || true
+}
+trap cleanup EXIT INT TERM
+
+# ── orchestrator daemon (serve-only): owns the worker windows ─────────────────
+if [ "${TOKYO_NO_ORCH:-0}" != "1" ] && [ -n "$ORCH" ]; then
+	MODEL_ARG="${TOKYO_ORCH_MODEL:-relay/claude-opus-4.8}"
+	"$ORCH" serve \
+		--model "$MODEL_ARG" \
+		--project-dir "$PROJECT_DIR" \
+		--tmux-session "$SESSION" &
+	ORCH_PID=$!
+	for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do
+		[ -S "$SOCK" ] && break
+		kill -0 "$ORCH_PID" 2>/dev/null || { ORCH_PID=""; break; }
+		sleep 0.2
+	done
+	if [ -S "$SOCK" ]; then
+		echo "[tokyo] orchestrator ready: $SOCK" >&2
+	else
+		echo "[tokyo] warning: orchestrator socket not up — teams/hyperplan unavailable" >&2
+	fi
+elif [ "${TOKYO_NO_ORCH:-0}" != "1" ]; then
+	echo "[tokyo] warning: orchestrator binary not found (build: cd orchestrator && cargo build --release)" >&2
+fi
+
+# ── build the Lead command for window 0 ───────────────────────────────────────
+# Auto-activate the harness; the extension reads TOKYO_AUTO in session_start.
+# Tell the extension which tmux session owns the team windows.
+LEAD_ENV="TOKYO_AUTO=1 TOKYO_TMUX_SESSION=$(printf %q "$SESSION")"
+if [ "${TOKYO_NO_DEV_EXT:-0}" = "1" ] || [ ! -f "$EXT" ]; then
+	LEAD_CMD="$LEAD_ENV pi"
+else
+	LEAD_CMD="$LEAD_ENV pi -e $(printf %q "$EXT")"
+fi
+# Forward any extra args (initial prompt, --model, ...) to the Lead pi.
+for arg in "$@"; do
+	LEAD_CMD="$LEAD_CMD $(printf %q "$arg")"
+done
+
+# ── create the tmux session with the Lead in window 0, then attach ────────────
+# remain-on-exit so a crashed Lead leaves the window for inspection rather than
+# silently collapsing the session.
+tmux new-session -d -s "$SESSION" -n lead "$LEAD_CMD"
+tmux set-option -t "$SESSION" mouse on 2>/dev/null || true
+
+# Attach in the foreground. When you detach or the Lead exits, we fall through
+# to cleanup (orchestrator shutdown + socket removal).
+tmux attach -t "$SESSION"
+
+# Lead window gone / detached → tear down the whole session so no orphan windows.
+tmux kill-session -t "$SESSION" 2>/dev/null || true
