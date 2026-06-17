@@ -66,9 +66,17 @@ const TEAM_ENABLED = true; // always on — orchestrator handles workers on-dema
 const CORE_TOKYO_TOOLS = ["tokyo_phase", "tokyo_ambiguity", "tokyo_spec_save", "tokyo_plan_save", "tokyo_goal", "tokyo_complete", "tokyo_verify", "tokyo_memory", "tokyo_notepad"];
 const TOKYO_TOOLS = [...CORE_TOKYO_TOOLS, "tokyo_team"];
 /** Tools available when a phase bars mutations (mirrors plan-mode's read-only set). */
-const READONLY_TOOLS = ["read", "bash", "grep", "find", "ls", "questionnaire", "spawn_subagents", ...TOKYO_TOOLS];
+const BASE_TOOLS = ["read", "bash", "grep", "find", "ls", "questionnaire", "spawn_subagents", "browser_snapshot", "browser_view", "web_search", "web_fetch"];
+/** Async/bash job tools available in all phases. */
+const ASYNC_TOOLS = ["bash_async", "bash_jobs", "bash_output", "bash_abort"];
+/** Subagent management tools from pi-skills/subagents. */
+const SUBAGENT_TOOLS = ["send_to_subagent", "list_subagents", "abort_subagent", "fetch_subagent_result"];
+/** Todo tracking tools. */
+const TODO_TOOLS = ["todo_write", "todo_read"];
+const UNIVERSAL_TOOLS = [...BASE_TOOLS, ...ASYNC_TOOLS, ...SUBAGENT_TOOLS, ...TODO_TOOLS];
+const READONLY_TOOLS = [...UNIVERSAL_TOOLS, ...TOKYO_TOOLS];
 /** Tools available when a phase allows mutations. */
-const FULL_TOOLS = ["read", "bash", "grep", "find", "ls", "questionnaire", "spawn_subagents", ...MUTATION_TOOLS, ...TOKYO_TOOLS];
+const FULL_TOOLS = [...UNIVERSAL_TOOLS, ...MUTATION_TOOLS, ...TOKYO_TOOLS];
 /** EXECUTE tool set: same as FULL but WITHOUT questionnaire — EXECUTE is the
  * autonomous run phase and must never block waiting for user input (so it keeps
  * grinding while you're away). The model records autonomous choices in the
