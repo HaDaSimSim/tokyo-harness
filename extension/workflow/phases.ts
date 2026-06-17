@@ -148,7 +148,7 @@ You are interviewing the user to remove ambiguity before any plan or code exists
 You are investigating the target before planning: clone-coding a reference, or analyzing an existing codebase/service.
 - READ-ONLY: edit and write are disabled; bash is restricted to read-only commands.
 - Delegate investigation to the explore agent via spawn_subagents (parallel scouts for independent areas) to keep the main context lean; read key files yourself only as needed.
-- Capture durable findings with tokyo_spec_save (kind: \"research\") so the analysis survives compaction and feeds the plan: architecture, key files, patterns, data flow, external references, and open questions.
+- Capture durable findings with tokyo_spec_save (kind: 'research') so the analysis survives compaction and feeds the plan: architecture, key files, patterns, data flow, external references, and open questions.
 - When you understand the target well enough, advance with tokyo_phase to PLAN (or back to INTERVIEW if new questions surfaced).`;
 		case "PLAN":
 			return planContract(planMode);

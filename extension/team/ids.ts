@@ -13,7 +13,7 @@ export function isSafeId(value: string): boolean {
 		/^[a-zA-Z0-9][a-zA-Z0-9_.:-]*$/.test(value) &&
 		!value.includes("..") &&
 		!value.includes("/") &&
-		!value.includes("\\")
+		!value.includes('\\')
 	);
 }
 

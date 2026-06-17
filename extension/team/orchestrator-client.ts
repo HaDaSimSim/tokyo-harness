@@ -108,7 +108,7 @@ export class OrchestratorClient {
 					client.end();
 					try {
 						resolve(JSON.parse(json) as IpcResponse);
-					} catch (e) {
+					} catch (_e) {
 						reject(new Error(`Invalid JSON from orchestrator: ${json}`));
 					}
 				}

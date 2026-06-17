@@ -11,7 +11,7 @@
  *   clear     Write tombstone to every category file (old entries stay for audit)
  */
 
-import type { ExtensionContext, ToolDefinition, AgentToolResult } from "@earendil-works/pi-coding-agent";
+import type { ToolDefinition, AgentToolResult } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import type { StateWriter } from "../state/index.ts";
 

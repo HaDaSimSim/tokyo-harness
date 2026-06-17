@@ -109,7 +109,6 @@ export interface TeamToolHooks {
 	notify?: (note: string) => void;
 }
 
-const defaultModelFor = (id: string): string | undefined => getRoleAgent(id)?.model;
 
 /**
  * Teardown: pause the orchestrator (snapshot + kill workers + exit) when the

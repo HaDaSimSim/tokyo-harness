@@ -31,7 +31,7 @@ export interface AmbiguityHooks {
 	/** Per-run profile override (set by the interview skill flag), if any. */
 	runProfile: () => ProfileName | undefined;
 	/** Advance INTERVIEW→PLAN when clarity clears (no consent needed for this edge). */
-	advanceToPlan: (ctx: ExtensionContext) => Promise<boolean>;
+	advanceToPlan: (_ctx: ExtensionContext) => Promise<boolean>;
 	/** StateWriter for persisting interview progress to disk. */
 	state: StateWriter;
 }
@@ -244,7 +244,7 @@ function extractEntities(rationale: string): string[] {
  */
 function computeStability(prev: string[], current: string[]): number {
 	if (prev.length === 0 && current.length === 0) return 1.0;
-	const prevSet = new Set(prev);
+	const _prevSet = new Set(prev);
 	const currSet = new Set(current);
 	const stable = prev.filter((e) => currSet.has(e)).length;
 	const total = new Set([...prev, ...current]).size;
