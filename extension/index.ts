@@ -454,8 +454,7 @@ export default function harness(pi: ExtensionAPI) {
 					? "Entering PLAN with ADVERSARIAL (hyperplan) depth. Begin the hyperplan process now per your phase contract: create the hyperplan team, start hyperplan_run, and wait for the completion ping. Do not ask me to start it."
 					: `Entering PLAN with ${planMode} depth. Begin planning now per your phase contract.`;
 			try {
-				if (ctx.isIdle()) pi.sendUserMessage(planKick);
-				else pi.sendUserMessage(planKick, { deliverAs: "followUp" });
+				pi.sendUserMessage(planKick, { deliverAs: "steer" });
 			} catch { /* host not ready — contract still injects next turn */ }
 			return { ok: true, phase: machine.current };
 		}
@@ -978,7 +977,7 @@ export default function harness(pi: ExtensionAPI) {
 				if (!evidenceOk) {
 					const nudge = "All goals settled but some lack verified evidence. Run tokyo_verify (build/tests + reviewer verdict) for each completed goal before advancing to VERIFY.";
 					if (ctx.isIdle()) pi.sendUserMessage(nudge);
-					else pi.sendUserMessage(nudge, { deliverAs: "followUp" });
+					else pi.sendUserMessage(nudge, { deliverAs: "steer" });
 					return;
 				}
 				const res = await requestTransition("VERIFY", ctx);
@@ -989,7 +988,7 @@ export default function harness(pi: ExtensionAPI) {
 					const nudge =
 						"All goals settled — auto-advanced to VERIFY. Run tokyo_verify (build/tests + reviewer verdict) to record evidence, then advance to REVIEW.";
 					if (ctx.isIdle()) pi.sendUserMessage(nudge);
-					else pi.sendUserMessage(nudge, { deliverAs: "followUp" });
+					else pi.sendUserMessage(nudge, { deliverAs: "steer" });
 				}
 				return;
 			}
@@ -1007,7 +1006,7 @@ export default function harness(pi: ExtensionAPI) {
 					cont = { iterations: cont.iterations + 1, lastSignature: "" };
 					pi.appendEntry(HARNESS.contEntryType, cont);
 					if (ctx.isIdle()) pi.sendUserMessage(nudge);
-					else pi.sendUserMessage(nudge, { deliverAs: "followUp" });
+					else pi.sendUserMessage(nudge, { deliverAs: "steer" });
 					return;
 				} else {
 					// BLOCKER ESCALATION: nudge failed, auto-block the current goal
@@ -1033,7 +1032,7 @@ export default function harness(pi: ExtensionAPI) {
 		if (ctx.isIdle()) {
 			pi.sendUserMessage(decision.prompt);
 		} else {
-			pi.sendUserMessage(decision.prompt, { deliverAs: "followUp" });
+			pi.sendUserMessage(decision.prompt, { deliverAs: "steer" });
 		}
 	});
 
