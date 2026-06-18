@@ -334,8 +334,8 @@ async function writeAllGoals(state: StateWriter, goals: Goal[], currentGoalId: s
 // ---- tokyo_goal (create/list/drop) -------------------------------------------
 
 const GoalParams = Type.Object({
-	op: Type.Union([Type.Literal("create"), Type.Literal("list"), Type.Literal("drop"), Type.Literal("split"), Type.Literal("reorder"), Type.Literal("revise"), Type.Literal("block"), Type.Literal("unblock")], {
-		description: "create, list, drop, split, reorder, revise (edit objective text), block (mark blocked with reason), or unblock a goal.",
+	op: Type.Union([Type.Literal("create"), Type.Literal("list"), Type.Literal("drop"), Type.Literal("split"), Type.Literal("reorder"), Type.Literal("revise"), Type.Literal("block"), Type.Literal("unblock"), Type.Literal("reopen")], {
+		description: "create, list, drop, split, reorder, revise, block, unblock, or reopen (reviewer rejection — resets completed goal to active).",
 	}),
 	objective: Type.Optional(Type.String({ description: "Objective text (required for create; new text for revise)." })),
 	goal_id: Type.Optional(Type.String({ description: "Goal id (for drop/split/revise/block/unblock; defaults to current)." })),
@@ -487,6 +487,21 @@ export function makeGoalTool(hooks: GoalHooks): ToolDefinition<typeof GoalParams
 				hooks.onGoalsChange?.(goals);
 				await traceEvent(hooks.state, { ts: now, type: "goal_unblocked", goal_id: id }, { category: "ledger", verb: "goal_unblocked", skill: "execute" });
 				return okResult(`Goal ${id} unblocked and active.`, "unblock", goals);
+			}
+			if (params.op === "reopen") {
+				// Reviewer rejection gate: reviewer can reopen a completed goal
+				// (e.g. Oracle gate found issues). Resets complete→active.
+				const id = params.goal_id ?? goals.current_goal_id;
+				const goal = goals.goals.find((g) => g.id === id);
+				if (!goal) return errResult(`no goal ${id}`, goals);
+				if (goal.status !== "complete") return errResult(`goal ${id} is ${goal.status}, not complete`, goals);
+				goal.status = "active";
+				delete (goal as unknown as Record<string, unknown>).receipt;
+				goal.updated_at = now;
+				await writeAllGoals(hooks.state, goals.goals, goals.current_goal_id);
+				hooks.onGoalsChange?.(goals);
+				await traceEvent(hooks.state, { ts: now, type: "goal_reopened", goal_id: id, reason: params.reason }, { category: "ledger", verb: "goal_reopened", skill: "execute" });
+				return okResult(`Goal ${id} reopened (reviewer rejection${params.reason ? `: ${params.reason}` : ""}). Active again.`, "reopen", goals);
 			}
 			// list
 			const lines = goals.goals.length
