@@ -21,3 +21,4 @@ agents/research/
 docs/research*
 skills/research/
 research/
+.playwright-output/
