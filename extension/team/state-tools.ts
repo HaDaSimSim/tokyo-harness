@@ -134,12 +134,32 @@ const PlanSaveParams = Type.Object({
 	acceptance_criteria: Type.Optional(
 		Type.Array(Type.String(), { description: "Testable acceptance criteria; each becomes a checkable item." }),
 	),
+	/**
+	 * Structured goal list — the plan's task DAG, not the markdown summary.
+	 * Every goal in this list is auto-registered in the goal ledger on save,
+	 * so EXECUTE starts with the full structure already wired. The plan-save
+	 * gate REJECTS any goal that lacks files: you can't plan code without
+	 * knowing which files you'll touch. (Non-code goals like docs/config are
+	 * exempt — mark them with an empty array or a single non-source file.)
+	 */
+	goals: Type.Optional(
+		Type.Array(
+			Type.Object({
+				objective: Type.String({ description: "What this goal achieves (testable wording)." }),
+				files: Type.Array(Type.String(), { description: "Files this goal will WRITE (every code goal MUST list them). Must be non-empty for code goals." }),
+				depends_on: Type.Optional(Type.Array(Type.Union([Type.String(), Type.Number()]), { description: "Goal indices (0-based) or IDs this one depends on." })),
+			}),
+			{ description: "Structured goal DAG. Each entry is a goal to auto-register on plan save. depends_on uses 0-based indices." },
+		),
+	),
 });
 
 interface PlanSaveDetails {
 	path: string;
 	sha256: string;
 	slug: string;
+	/** Goal ids auto-registered from the structured goals list (if supplied). */
+	registered_goals: string[];
 }
 
 export interface PlanSaveHooks {
@@ -162,7 +182,7 @@ export function makePlanSaveTool(hooks: PlanSaveHooks): ToolDefinition<typeof Pl
 			if (phase !== "PLAN") {
 				return {
 					content: [{ type: "text", text: `tokyo_plan_save is only valid in PLAN (current: ${phase}).` }],
-					details: { path: "", sha256: "", slug: "" },
+					details: { path: "", sha256: "", slug: "", registered_goals: [] },
 					isError: true,
 				} as AgentToolResult<PlanSaveDetails>;
 			}
@@ -186,30 +206,92 @@ export function makePlanSaveTool(hooks: PlanSaveHooks): ToolDefinition<typeof Pl
 
 			const rel = `plans/plan-${slug}.md`;
 			let absPath: string;
+			const registeredGoals: string[] = [];
 			try {
+				// ── 1. Save the plan markdown artifact ──
 				absPath = await hooks.state.writeTextAtomic(rel, body, {
 					audit: { category: "artifact", verb: "save_plan", skill: "plan", owner: "tokyo-runtime" },
 				});
-				// also append a ledger event so the plan is part of the durable trail
 				await traceEvent(hooks.state,
 					{ ts, type: "plan_saved", slug, sha256: checksum, path: rel },
 					{ category: "ledger", verb: "plan_saved", skill: "plan" },
 				);
+
+				// ── 2. Auto-register structured goals (the plan's task DAG) ──
+				if (params.goals && params.goals.length > 0) {
+					const fileGateErrors: string[] = [];
+					for (let i = 0; i < params.goals.length; i++) {
+						const sg = params.goals[i];
+						// File gate: every code goal needs declared files.
+						// Docs/config goals are exempt (empty array is fine).
+						const isNonCode = /doc(s|umentation)|readme|config|setup|infra/i.test(sg.objective);
+						if (!isNonCode && (!sg.files || sg.files.length === 0)) {
+							fileGateErrors.push(`goal ${i} "${sg.objective.slice(0, 60)}" has no files`);
+						}
+					}
+					if (fileGateErrors.length > 0) {
+						return {
+							content: [{
+								type: "text",
+								text: `PLAN REJECTED — file gate: every code goal must declare the files it will write.\n${fileGateErrors.join("\n")}\n\nFix the plan and retry tokyo_plan_save.`,
+							}],
+							details: { path: absPath, sha256: checksum, slug, registered_goals: [] },
+							isError: true,
+						} as AgentToolResult<PlanSaveDetails>;
+					}
+
+					// Map index-based depends_on → real goal ids.
+					const goalIds: string[] = [];
+					const allGoals: Goal[] = [];
+					for (const _g of params.goals) {
+						const id = randomUUID().slice(0, 8);
+						goalIds.push(id);
+					}
+					for (let i = 0; i < params.goals.length; i++) {
+						const sg = params.goals[i];
+						const resolvedDeps = (sg.depends_on ?? []).map((rawIdx) => {
+							const idx = typeof rawIdx === "number" ? rawIdx : parseInt(String(rawIdx), 10);
+							if (isNaN(idx) || idx < 0 || idx >= goalIds.length) return "__invalid__";
+							return goalIds[idx]!;
+						}).filter((d: string) => d !== "__invalid__");
+						const goal: Goal = {
+							id: goalIds[i],
+							objective: sg.objective.trim(),
+							status: "active",
+							created_at: ts,
+							updated_at: ts,
+							files: sg.files,
+							depends_on: resolvedDeps.length > 0 ? resolvedDeps : undefined,
+						};
+						allGoals.push(goal);
+						registeredGoals.push(goal.id);
+						await writeGoal(hooks.state, goal);
+						await traceEvent(hooks.state,
+							{ ts, type: "goal_created", goal_id: goal.id, objective: goal.objective, source: "plan" },
+							{ category: "ledger", verb: "goal_created", skill: "plan" },
+						);
+					}
+					// Write the goal index (first goal = current).
+					await writeGoalIndex(hooks.state, allGoals, allGoals[0]?.id ?? null);
+				}
 			} catch (err) {
 				return {
 					content: [{ type: "text", text: `Failed to save plan: ${(err as Error).message}` }],
-					details: { path: "", sha256: checksum, slug },
+					details: { path: "", sha256: checksum, slug, registered_goals: [] },
 					isError: true,
 				} as AgentToolResult<PlanSaveDetails>;
 			}
+			const goalSummary = registeredGoals.length > 0
+				? `\nRegistered ${registeredGoals.length} goal(s): ${registeredGoals.join(", ")}. Execute starts pre-wired.`
+				: "";
 			return {
 				content: [
 					{
 						type: "text",
-						text: `Plan saved (pending approval): ${rel}\nsha256: ${checksum}\n\n${params.plan.trim()}\n\n---\nPresent it to the user, then advance with tokyo_phase to EXECUTE to request consent.`,
+						text: `Plan saved (pending approval): ${rel}\nsha256: ${checksum}${goalSummary}\n\n${params.plan.trim()}\n\n---\nPresent it to the user, then advance with tokyo_phase to EXECUTE to request consent.`,
 					},
 				],
-				details: { path: absPath, sha256: checksum, slug },
+				details: { path: absPath, sha256: checksum, slug, registered_goals: registeredGoals },
 			};
 		},
 	};
@@ -342,6 +424,8 @@ const GoalParams = Type.Object({
 	sub_goals: Type.Optional(Type.Array(Type.String(), { description: "For split: list of sub-goal objectives to replace the original." })),
 	order: Type.Optional(Type.Array(Type.String(), { description: "For reorder: goal IDs in desired execution order." })),
 	reason: Type.Optional(Type.String({ description: "For block: why this goal is blocked." })),
+	files: Type.Optional(Type.Array(Type.String(), { description: "For create: files this goal writes. The claim gate serializes overlapping-file goals so they never run concurrently." })),
+	depends_on: Type.Optional(Type.Array(Type.String(), { description: "For create: goal IDs that must be complete first." })),
 });
 
 interface GoalDetails {
@@ -384,6 +468,8 @@ export function makeGoalTool(hooks: GoalHooks): ToolDefinition<typeof GoalParams
 					status: "active",
 					created_at: now,
 					updated_at: now,
+					files: params.files,
+					depends_on: params.depends_on,
 				};
 				goals.goals.push(goal);
 				goals.current_goal_id = goal.id;

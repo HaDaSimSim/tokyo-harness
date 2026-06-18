@@ -233,6 +233,59 @@ export default function harness(pi: ExtensionAPI) {
 		}
 	}
 
+	/** Find the most recently touched team name under .tokyo/team/, or null. */
+	async function findActiveTeam(): Promise<string | null> {
+		try {
+			const abs = `${process.cwd()}/${HARNESS.dotDir}/team`;
+			const fsmod = await import("node:fs");
+			if (!fsmod.existsSync(abs)) return null;
+			let best: { team: string; mtime: number } | null = null;
+			for (const d of fsmod.readdirSync(abs, { withFileTypes: true })) {
+				if (!d.isDirectory()) continue;
+				const mf = `${abs}/${d.name}/manifest.json`;
+				if (!fsmod.existsSync(mf)) continue;
+				const mt = fsmod.statSync(mf).mtimeMs;
+				if (!best || mt > best.mtime) best = { team: d.name, mtime: mt };
+			}
+			return best?.team ?? null;
+		} catch {
+			return null;
+		}
+	}
+
+	/**
+	 * Reconcile manifest liveness against the live orchestrator. The Rust resume
+	 * path (`tokyo continue`/`resume`) re-spawns workers via restore_worker IPC
+	 * but never touches manifest.json, so workers stay pinned at "starting" in the
+	 * dashboard even though they're alive and primed. On lead startup, ask the
+	 * orchestrator which workers actually answer and flip the stale "starting"
+	 * ones to idle. Keeps manifest.json single-writer (always TS).
+	 */
+	async function reconcileTeamLiveness(ctx: ExtensionContext): Promise<void> {
+		try {
+			const team = await findActiveTeam();
+			if (!team) return;
+			const co = new TeamCoordinator(state, team);
+			const m = await co.readManifest();
+			if (!m || m.phase === "stopped") return;
+			const stale = m.workers.filter((w) => w.status === "starting").map((w) => w.id);
+			if (stale.length === 0) return;
+			const { OrchestratorClient } = await import("./team/orchestrator-client.ts");
+			const orch = new OrchestratorClient(process.cwd());
+			if (!(await orch.probe())) return;
+			const live = new Set((await orch.status()).filter((w) => w.alive).map((w) => w.id));
+			const recovered = stale.filter((id) => live.has(id));
+			if (recovered.length === 0) return;
+			await co.markWorkersLive(recovered);
+			await renderTeamWidget(ctx);
+			if (process.env.TOKYO_DEBUG === "1") {
+				process.stderr.write(`[${HARNESS.name}] reconciled ${recovered.length} worker(s) starting\u2192idle\n`);
+			}
+		} catch {
+			/* best-effort: a dashboard glitch must never block startup */
+		}
+	}
+
 	/** Mirror the phase policy onto the active tool set (coarse first layer). */
 	function syncActiveTools(): void {
 		if (!active) return;
@@ -327,7 +380,7 @@ export default function harness(pi: ExtensionAPI) {
 				for (const file of fs.readdirSync(targetDir)) {
 					if (file.startsWith("tokyo-") && file.endsWith(".md")) {
 						const fp = path.join(targetDir, file);
-						try { if (fs.lstatSync(fp).isSymbolicLink() || fs.statSync(fp).isFile()) fs.unlinkSync(fp); } catch {}
+						try { if (fs.lstatSync(fp).isSymbolicLink() || fs.statSync(fp).isFile()) fs.unlinkSync(fp); } catch { /* best-effort cleanup */ }
 					}
 				}
 			}
@@ -424,7 +477,7 @@ export default function harness(pi: ExtensionAPI) {
 		// VERIFY→REVIEW evidence gate: require recorded verification evidence so the
 		// final transition isn't a free rubber-stamp (fixes the unguarded VERIFY→DONE).
 		if (from === "VERIFY" && to === "REVIEW") {
-			let hasEvidence = false;
+			let hasEvidence: boolean;
 			try {
 				hasEvidence = await hasVerifyEvidence(state);
 			} catch {
@@ -572,6 +625,9 @@ export default function harness(pi: ExtensionAPI) {
 		}
 		if (active) {
 			ctx.ui.notify(`${HARNESS.name} active (phase: ${machine.current.toLowerCase()}).`, "info");
+			// After a resume/continue the Rust path re-spawns workers but doesn't
+			// touch manifest.json; reconcile so they don't look stuck at "starting".
+			void reconcileTeamLiveness(ctx);
 		}
 	});
 

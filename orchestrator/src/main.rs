@@ -479,6 +479,18 @@ async fn main() -> anyhow::Result<()> {
             if !status.success() {
                 anyhow::bail!("failed to create tmux session {session}");
             }
+            // Match bin/tokyo: drive the OS terminal title from the active window.
+            for opt in [
+                ("mouse", "on"),
+                ("set-titles", "on"),
+            ] {
+                let _ = std::process::Command::new("tmux")
+                    .args(["set-option", "-t", &session, opt.0, opt.1])
+                    .status();
+            }
+            let _ = std::process::Command::new("tmux")
+                .args(["set-option", "-t", &session, "set-titles-string", "tokyo: #S [#W]"])
+                .status();
 
             // 4. Spawn the orchestrator as a DETACHED background process. It
             //    outlives `tokyo resume` so the user can keep using the session

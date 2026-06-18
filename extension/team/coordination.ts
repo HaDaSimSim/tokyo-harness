@@ -119,6 +119,7 @@ export class TeamCoordinator {
 		objective: string;
 		required_role?: string;
 		depends_on?: string[];
+		files?: string[];
 	}): Promise<TeamTask> {
 		const now = new Date().toISOString();
 		const task: TeamTask = {
@@ -128,6 +129,7 @@ export class TeamCoordinator {
 			owner: null,
 			required_role: input.required_role,
 			depends_on: input.depends_on ?? [],
+			files: input.files,
 			leased_at: null,
 			created_at: now,
 			updated_at: now,

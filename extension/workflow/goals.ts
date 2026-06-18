@@ -23,6 +23,15 @@ export interface Goal {
 	status: GoalStatus;
 	created_at: string;
 	updated_at: string;
+	/**
+	 * Files this goal will WRITE. Every code goal MUST have files declared —
+	 * the plan-save gate rejects goals without them. This is the hard guard
+	 * that prevents two concurrent goals from writing the same file: the
+	 * claim gate serializes overlapping-file tasks (see coordination-logic.ts).
+	 */
+	files?: string[];
+	/** Goal ids this one depends on (must be complete first). */
+	depends_on?: string[];
 	/** sha256 of the completion receipt, set when completed. */
 	receipt_sha256?: string;
 }

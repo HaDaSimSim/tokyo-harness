@@ -117,6 +117,11 @@ done
 # silently collapsing the session.
 tmux new-session -d -s "$SESSION" -n lead "$LEAD_CMD"
 tmux set-option -t "$SESSION" mouse on 2>/dev/null || true
+# Drive the OS terminal title from tmux: "tokyo · <session> · <window>".
+# set-titles makes tmux emit the xterm title escape; the string uses the
+# active window name (lead / w-<id>) so the title tracks what you're looking at.
+tmux set-option -t "$SESSION" set-titles on 2>/dev/null || true
+tmux set-option -t "$SESSION" set-titles-string "tokyo: #S [#W]" 2>/dev/null || true
 
 # Safety net for SIGKILL / terminal-closed paths: when the Lead's pane dies,
 # the extension's session_shutdown hook never fires, so we can't rely on the

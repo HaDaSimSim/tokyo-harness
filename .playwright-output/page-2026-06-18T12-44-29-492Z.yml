@@ -1,0 +1,309 @@
+- generic [active] [ref=e1]:
+  - generic [ref=e2]:
+    - generic [ref=e3]:
+      - link "Skip to content" [ref=e4] [cursor=pointer]:
+        - /url: "#start-of-content"
+      - banner [ref=e6]:
+        - heading "Navigation Menu" [level=2] [ref=e7]
+        - generic [ref=e8]:
+          - link "Homepage" [ref=e10] [cursor=pointer]:
+            - /url: /
+            - img [ref=e11]
+          - generic [ref=e13]:
+            - navigation "Global" [ref=e16]:
+              - list [ref=e17]:
+                - listitem [ref=e18]:
+                  - button "Platform" [ref=e20] [cursor=pointer]:
+                    - text: Platform
+                    - img [ref=e21]
+                - listitem [ref=e23]:
+                  - button "Solutions" [ref=e25] [cursor=pointer]:
+                    - text: Solutions
+                    - img [ref=e26]
+                - listitem [ref=e28]:
+                  - button "Resources" [ref=e30] [cursor=pointer]:
+                    - text: Resources
+                    - img [ref=e31]
+                - listitem [ref=e33]:
+                  - button "Open Source" [ref=e35] [cursor=pointer]:
+                    - text: Open Source
+                    - img [ref=e36]
+                - listitem [ref=e38]:
+                  - button "Enterprise" [ref=e40] [cursor=pointer]:
+                    - text: Enterprise
+                    - img [ref=e41]
+                - listitem [ref=e43]:
+                  - link "Pricing" [ref=e44] [cursor=pointer]:
+                    - /url: https://github.com/pricing
+                    - generic [ref=e45]: Pricing
+            - generic [ref=e46]:
+              - button "Search or jump to…" [ref=e49] [cursor=pointer]:
+                - img [ref=e51]
+              - link "Sign in" [ref=e54] [cursor=pointer]:
+                - /url: /login?return_to=https%3A%2F%2Fgithub.com%2Ftyeongkim%2Fspec-graph%2Ftree%2Fmain%2Fskills
+              - link "Sign up" [ref=e55] [cursor=pointer]:
+                - /url: /signup?ref_cta=Sign+up&ref_loc=header+logged+out&ref_page=%2F%3Cuser-name%3E%2F%3Crepo-name%3E%2Ffiles%2Fdisambiguate&source=header-repo&source_repo=tyeongkim%2Fspec-graph
+              - button "Appearance settings" [ref=e58] [cursor=pointer]:
+                - img
+    - main [ref=e62]:
+      - generic [ref=e63]:
+        - generic [ref=e64]:
+          - generic [ref=e66]:
+            - img [ref=e67]
+            - link "tyeongkim" [ref=e70] [cursor=pointer]:
+              - /url: /tyeongkim
+            - generic [ref=e71]: /
+            - strong [ref=e72]:
+              - link "spec-graph" [ref=e73] [cursor=pointer]:
+                - /url: /tyeongkim/spec-graph
+            - generic [ref=e74]: Public
+          - generic [ref=e75]:
+            - list:
+              - listitem [ref=e76]:
+                - link "You must be signed in to change notification settings" [ref=e77] [cursor=pointer]:
+                  - /url: /login?return_to=%2Ftyeongkim%2Fspec-graph
+                  - img [ref=e78]
+                  - text: Notifications
+              - listitem [ref=e80]:
+                - link "Fork 0" [ref=e81] [cursor=pointer]:
+                  - /url: /login?return_to=%2Ftyeongkim%2Fspec-graph
+                  - img [ref=e82]
+                  - text: Fork
+                  - generic "0" [ref=e84]
+              - listitem [ref=e85]:
+                - link "You must be signed in to star a repository" [ref=e87] [cursor=pointer]:
+                  - /url: /login?return_to=%2Ftyeongkim%2Fspec-graph
+                  - img [ref=e88]
+                  - text: Star
+                  - generic "6 users starred this repository" [ref=e90]: "6"
+        - navigation "Repository" [ref=e91]:
+          - list [ref=e92]:
+            - listitem [ref=e93]:
+              - link "Code" [ref=e94] [cursor=pointer]:
+                - /url: /tyeongkim/spec-graph
+                - img [ref=e95]
+                - generic [ref=e97]: Code
+            - listitem [ref=e98]:
+              - link "Issues" [ref=e99] [cursor=pointer]:
+                - /url: /tyeongkim/spec-graph/issues
+                - img [ref=e100]
+                - generic [ref=e103]: Issues
+            - listitem [ref=e104]:
+              - link "Pull requests" [ref=e105] [cursor=pointer]:
+                - /url: /tyeongkim/spec-graph/pulls
+                - img [ref=e106]
+                - generic [ref=e108]: Pull requests
+            - listitem [ref=e109]:
+              - link "Actions" [ref=e110] [cursor=pointer]:
+                - /url: /tyeongkim/spec-graph/actions
+                - img [ref=e111]
+                - generic [ref=e113]: Actions
+            - listitem [ref=e114]:
+              - link "Security and quality" [ref=e115] [cursor=pointer]:
+                - /url: /tyeongkim/spec-graph/security
+                - img [ref=e116]
+                - generic [ref=e118]: Security and quality
+            - listitem [ref=e119]:
+              - link "Insights" [ref=e120] [cursor=pointer]:
+                - /url: /tyeongkim/spec-graph/pulse
+                - img [ref=e121]
+                - generic [ref=e123]: Insights
+      - generic [ref=e131]:
+        - generic [ref=e133]:
+          - generic [ref=e136]:
+            - generic [ref=e137]:
+              - generic [ref=e138]:
+                - heading "Collapse file tree" [level=2] [ref=e139]:
+                  - button "Collapse file tree" [expanded] [ref=e140] [cursor=pointer]:
+                    - img [ref=e141]
+                - heading "Files" [level=2] [ref=e144]
+              - generic [ref=e145]:
+                - button "main branch" [ref=e147] [cursor=pointer]:
+                  - generic [ref=e148]:
+                    - generic [ref=e150]:
+                      - img [ref=e152]
+                      - generic [ref=e155]: main
+                    - generic:
+                      - img
+                - button "Search this repository (forward slash)" [ref=e157] [cursor=pointer]:
+                  - img [ref=e158]
+            - generic [ref=e161]:
+              - img [ref=e163]
+              - combobox "Go to file" [ref=e165]
+            - navigation "File Tree Navigation" [ref=e171]:
+              - tree "Files" [ref=e173]:
+                - treeitem ".github" [level=1] [ref=e174]:
+                  - generic [ref=e175] [cursor=pointer]:
+                    - img [ref=e177]
+                    - generic [ref=e179]:
+                      - img [ref=e183]
+                      - generic [ref=e185]: .github
+                - treeitem "cmd" [level=1] [ref=e186]:
+                  - generic [ref=e187] [cursor=pointer]:
+                    - img [ref=e189]
+                    - generic [ref=e191]:
+                      - img [ref=e195]
+                      - generic [ref=e197]: cmd
+                - treeitem "internal" [level=1] [ref=e198]:
+                  - generic [ref=e199] [cursor=pointer]:
+                    - img [ref=e201]
+                    - generic [ref=e203]:
+                      - img [ref=e207]
+                      - generic [ref=e209]: internal
+                - treeitem "pkg" [level=1] [ref=e210]:
+                  - generic [ref=e211] [cursor=pointer]:
+                    - img [ref=e213]
+                    - generic [ref=e215]:
+                      - img [ref=e219]
+                      - generic [ref=e221]: pkg
+                - treeitem "skills" [expanded] [level=1] [ref=e222]:
+                  - generic [ref=e223] [cursor=pointer]:
+                    - img [ref=e225]
+                    - generic [ref=e227]:
+                      - img [ref=e231]
+                      - generic [ref=e233]: skills
+                  - group "skills" [ref=e234]:
+                    - treeitem "spec-executor" [level=2] [ref=e235]:
+                      - generic [ref=e236] [cursor=pointer]:
+                        - img [ref=e241]
+                        - generic [ref=e243]:
+                          - img [ref=e247]
+                          - generic [ref=e249]: spec-executor
+                    - treeitem "spec-graph" [level=2] [ref=e250]:
+                      - generic [ref=e251] [cursor=pointer]:
+                        - img [ref=e256]
+                        - generic [ref=e258]:
+                          - img [ref=e262]
+                          - generic [ref=e264]: spec-graph
+                    - treeitem "spec-planner" [level=2] [ref=e265]:
+                      - generic [ref=e266] [cursor=pointer]:
+                        - img [ref=e271]
+                        - generic [ref=e273]:
+                          - img [ref=e277]
+                          - generic [ref=e279]: spec-planner
+                    - treeitem "spec-verifier" [level=2] [ref=e280]:
+                      - generic [ref=e281] [cursor=pointer]:
+                        - img [ref=e286]
+                        - generic [ref=e288]:
+                          - img [ref=e292]
+                          - generic [ref=e294]: spec-verifier
+                - treeitem ".gitignore" [level=1] [ref=e295]:
+                  - generic [ref=e297] [cursor=pointer]:
+                    - img [ref=e300]
+                    - generic [ref=e302]: .gitignore
+                - treeitem ".goreleaser.yaml" [level=1] [ref=e303]:
+                  - generic [ref=e305] [cursor=pointer]:
+                    - img [ref=e308]
+                    - generic [ref=e310]: .goreleaser.yaml
+                - treeitem "Makefile" [level=1] [ref=e311]:
+                  - generic [ref=e313] [cursor=pointer]:
+                    - img [ref=e316]
+                    - generic [ref=e318]: Makefile
+                - treeitem "PLAN.md" [level=1] [ref=e319]:
+                  - generic [ref=e321] [cursor=pointer]:
+                    - img [ref=e324]
+                    - generic [ref=e326]: PLAN.md
+                - treeitem "README.md" [level=1] [ref=e327]:
+                  - generic [ref=e329] [cursor=pointer]:
+                    - img [ref=e332]
+                    - generic [ref=e334]: README.md
+                - treeitem "go.mod" [level=1] [ref=e335]:
+                  - generic [ref=e337] [cursor=pointer]:
+                    - img [ref=e340]
+                    - generic [ref=e342]: go.mod
+                - treeitem "go.sum" [level=1] [ref=e343]:
+                  - generic [ref=e345] [cursor=pointer]:
+                    - img [ref=e348]
+                    - generic [ref=e350]: go.sum
+                - treeitem "skills-lock.json" [level=1] [ref=e351]:
+                  - generic [ref=e353] [cursor=pointer]:
+                    - img [ref=e356]
+                    - generic [ref=e358]: skills-lock.json
+          - slider "Draggable pane splitter" [ref=e360]
+        - generic [ref=e363]:
+          - generic [ref=e367]:
+            - generic [ref=e369]:
+              - navigation "Breadcrumbs" [ref=e370]:
+                - heading "Breadcrumbs" [level=2] [ref=e371]
+                - list [ref=e372]:
+                  - listitem [ref=e373]:
+                    - link "spec-graph" [ref=e374] [cursor=pointer]:
+                      - /url: /tyeongkim/spec-graph/tree/main
+              - generic [ref=e375]:
+                - text: /
+                - heading "skills" [level=1] [ref=e376]
+                - text: /
+              - button "Copy path" [ref=e377] [cursor=pointer]:
+                - img [ref=e378]
+            - generic [ref=e383]:
+              - heading "Directory actions" [level=2] [ref=e384]
+              - heading "More options" [level=2] [ref=e385]
+              - button "More options" [ref=e386] [cursor=pointer]:
+                - img [ref=e387]
+          - generic [ref=e389]:
+            - generic [ref=e391]:
+              - heading "Latest commit" [level=2] [ref=e392]
+              - generic [ref=e395]:
+                - heading "History" [level=2] [ref=e396]
+                - link "History" [ref=e397] [cursor=pointer]:
+                  - /url: /tyeongkim/spec-graph/commits/main/skills
+                  - generic [ref=e398]:
+                    - generic:
+                      - img
+                    - generic [ref=e399]: History
+            - generic [ref=e401]:
+              - heading "Folders and files" [level=2] [ref=e402]
+              - table "Folders and files" [ref=e403]:
+                - rowgroup [ref=e404]:
+                  - row "Name Last commit message Last commit date" [ref=e405]:
+                    - columnheader "Name" [ref=e406]
+                    - columnheader "Last commit message" [ref=e407]:
+                      - generic "Last commit message" [ref=e408]
+                    - columnheader "Last commit date" [ref=e409]:
+                      - generic "Last commit date" [ref=e410]
+                - rowgroup [ref=e411]:
+                  - row "parent directory Parent directory" [ref=e412]:
+                    - cell "parent directory Parent directory" [ref=e413]:
+                      - heading "parent directory" [level=3] [ref=e414]
+                      - link "Parent directory" [ref=e415] [cursor=pointer]:
+                        - /url: /tyeongkim/spec-graph/tree/main
+                        - generic [ref=e416]:
+                          - img [ref=e417]
+                          - text: ..
+                  - row "spec-executor, (Directory)" [ref=e419]:
+                    - cell "spec-executor, (Directory)" [ref=e420]:
+                      - generic [ref=e421]:
+                        - img [ref=e422]
+                        - link "spec-executor, (Directory)" [ref=e427] [cursor=pointer]:
+                          - /url: /tyeongkim/spec-graph/tree/main/skills/spec-executor
+                          - text: spec-executor
+                    - cell [ref=e428]
+                    - cell [ref=e430]
+                  - row "spec-graph, (Directory)" [ref=e433]:
+                    - cell "spec-graph, (Directory)" [ref=e434]:
+                      - generic [ref=e435]:
+                        - img [ref=e436]
+                        - link "spec-graph, (Directory)" [ref=e441] [cursor=pointer]:
+                          - /url: /tyeongkim/spec-graph/tree/main/skills/spec-graph
+                          - text: spec-graph
+                    - cell [ref=e442]
+                    - cell [ref=e444]
+                  - row "spec-planner, (Directory)" [ref=e447]:
+                    - cell "spec-planner, (Directory)" [ref=e448]:
+                      - generic [ref=e449]:
+                        - img [ref=e450]
+                        - link "spec-planner, (Directory)" [ref=e455] [cursor=pointer]:
+                          - /url: /tyeongkim/spec-graph/tree/main/skills/spec-planner
+                          - text: spec-planner
+                    - cell [ref=e456]
+                    - cell [ref=e458]
+                  - row "spec-verifier, (Directory)" [ref=e461]:
+                    - cell "spec-verifier, (Directory)" [ref=e462]:
+                      - generic [ref=e463]:
+                        - img [ref=e464]
+                        - link "spec-verifier, (Directory)" [ref=e469] [cursor=pointer]:
+                          - /url: /tyeongkim/spec-graph/tree/main/skills/spec-verifier
+                          - text: spec-verifier
+                    - cell [ref=e470]
+                    - cell [ref=e472]
+  - alert [ref=e478]

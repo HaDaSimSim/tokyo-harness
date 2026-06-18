@@ -13,11 +13,29 @@ import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import type { ExtensionContext, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import type { StateWriter } from "../state/index.ts";
-import { allTasksComplete, type TaskEvidence, type Worker } from "./coordination-logic.ts";
+import { allTasksComplete, findDependencyCycle, type TaskEvidence, type TeamTask, type Worker } from "./coordination-logic.ts";
 import { TeamCoordinator } from "./coordination.ts";
 import { getRoleAgent } from "./agents.ts";
 import { HYPERPLAN_MEMBERS } from "./hyperplan-members.ts";
 import { assertSafeId, assertSafeModel } from "./ids.ts";
+
+/**
+ * Operating preamble prepended to every non-hyperplan worker's system prompt.
+ * Team workers are full pi sessions, so they have spawn_subagents natively —
+ * tell them to use it. A worker that hits independent sub-work (parallel files,
+ * a read-only review, a scoped investigation) should fan out rather than
+ * grinding serially, then integrate. Hyperplan members are exempt: their
+ * adversarial single-voice critique must not be diluted by delegation.
+ */
+const WORKER_FANOUT_PREAMBLE = [
+	"[TEAM WORKER]",
+	"You are a tokyo team worker with full tool access, including spawn_subagents.",
+	"When your assigned work splits into independent units (disjoint files, a",
+	"scoped investigation, or a read-only review), fan them out with spawn_subagents",
+	"and integrate the results — do not grind serially when the work is parallel.",
+	"Never run two units that write the same file at once. Verify before you report done.",
+	"",
+].join(" ");
 
 const TeamParams = Type.Object({
 	op: Type.Union(
@@ -58,6 +76,7 @@ const TeamParams = Type.Object({
 	objective: Type.Optional(Type.String({ description: "For add_task: the task objective. For hyperplan_run: the task to analyze." })),
 	required_role: Type.Optional(Type.String({ description: "For add_task: role required to claim." })),
 	depends_on: Type.Optional(Type.Array(Type.String(), { description: "For add_task: prerequisite task ids." })),
+	files: Type.Optional(Type.Array(Type.String(), { description: "For add_task: files this task will WRITE. The claim gate serializes any two tasks with overlapping files so they never run concurrently — the hard guard behind the plan's parallel batches." })),
 	task_id: Type.Optional(Type.String({ description: "For claim/transition." })),
 	job_id: Type.Optional(Type.String({ description: "For hyperplan_poll: the job id returned by hyperplan_run." })),
 	goal_id: Type.Optional(Type.String({ description: "For claim_goal/release_goal: the goal id to claim or release." })),
@@ -192,7 +211,10 @@ export function makeTeamTool(hooks: TeamToolHooks): ToolDefinition<typeof TeamPa
 							const specs = roster.filter((w) => w.prompt).map((w) => ({
 								id: w.id,
 								model: w.model ?? resolveWorkerModel(tokyoCfg, w.id),
-								system_prompt: w.prompt ?? "",
+								system_prompt:
+									params.preset === "hyperplan"
+										? (w.prompt ?? "")
+										: WORKER_FANOUT_PREAMBLE + "\n" + (w.prompt ?? ""),
 							}));
 							try {
 								const result = await orchClient.createTeam(params.team, specs);
@@ -218,10 +240,24 @@ export function makeTeamTool(hooks: TeamToolHooks): ToolDefinition<typeof TeamPa
 					}
 					case "add_task": {
 						if (!params.objective?.trim()) return done(false, "add_task requires an objective");
+						// Pre-check: would this task's deps close a cycle? Validate against a
+						// hypothetical graph BEFORE persisting, so we never write an
+						// unschedulable task we'd have to roll back.
+						if (params.depends_on?.length) {
+							const existing = await co.listTasks();
+							const hypo: TeamTask = {
+								id: "__candidate__", objective: params.objective, status: "pending",
+								owner: null, depends_on: params.depends_on, leased_at: null,
+								created_at: "", updated_at: "",
+							};
+							const cycle = findDependencyCycle([...existing, hypo]);
+							if (cycle) return done(false, `rejected: dependency cycle ${cycle.join(" \u2192 ")}`);
+						}
 						const t = await co.createTask({
 							objective: params.objective,
 							required_role: params.required_role,
 							depends_on: params.depends_on,
+							files: params.files,
 						});
 						return done(true, `Task [${t.id}] created: ${t.objective}`, t);
 					}

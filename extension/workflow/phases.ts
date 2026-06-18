@@ -37,6 +37,8 @@ interface Edge {
 }
 
 const TRANSITIONS: Record<Phase, Edge[]> = {
+	// IDLE is the sisyphus default: direct-execute, verify, done. The model can
+	// escalate to INTERVIEW (pipeline) when a task is too complex for one-shot.
 	IDLE: [{ to: "INTERVIEW" }],
 	// Interview can branch into research (clone/analysis) or straight to plan.
 	INTERVIEW: [{ to: "RESEARCH" }, { to: "PLAN" }, { to: "IDLE" }],
@@ -135,7 +137,28 @@ export const PLAN_MODE_LABELS: Record<PlanMode, string> = {
 export function phaseContract(phase: Phase, planMode: PlanMode = "consensus"): string | null {
 	switch (phase) {
 		case "IDLE":
-			return null;
+			return `[TOKYO — IDLE (SISYPHUS)]
+You are in Tokyo's default direct-execution mode. No pipeline, no ceremony.
+
+CORE RULE: Do the task. Verify it. Show evidence. Done.
+
+EXECUTION:
+- Execute directly. Do NOT over-plan, over-escalate, or over-narrate.
+- If the task is genuinely complex (multiple subsystems, multi-day scope, unclear requirements), escalate with tokyo_phase INTERVIEW to enter the full pipeline.
+- For everything else — just do it now. Full tool access (edit/write/bash) is yours.
+
+COMPLETION: When done, present a compact summary:
+## Changes Made
+- \`path/to/file:line-range\` — concise description
+
+## Verification
+- \`[command]\` → \`[result]\`
+
+## Summary
+- 1-2 sentence outcome statement.
+
+No evidence = not complete. No ceremony = no plan doc, no consent gate, no goal ledger.
+Just: do → verify → report.`;
 		case "INTERVIEW":
 			return `[TOKYO — INTERVIEW PHASE]
 You are interviewing the user to remove ambiguity before any plan or code exists.
@@ -155,7 +178,9 @@ You are investigating the target before planning: clone-coding a reference, or a
 		case "EXECUTE":
 			return `[TOKYO — EXECUTE PHASE]
 The plan is approved. Full tool access is enabled.
-- Execute the approved plan step by step. Create one tokyo_goal per step and complete each with tokyo_complete + real evidence.
+- Execute the approved plan using its parallelization map. Create one tokyo_goal per step.
+- FAN OUT independent work: when the current batch has multiple steps with no unmet dependency and disjoint files, dispatch them concurrently — spawn_subagents for self-contained edit/build/test units, or tokyo_team workers when a persistent team is up. You are the integrator: claim/seed goals, hand each parallel unit a self-contained brief, then verify and complete goals with tokyo_complete + real evidence as results land.
+- Respect dependencies: never start a step whose prerequisites are unsettled, and never run two units that write the same file concurrently (the plan's map flags shared-file conflicts — serialize those).
 - Stay within the agreed scope. If the plan turns out wrong, return with tokyo_phase to PLAN to re-plan (your completed goals are preserved) rather than improvising out of scope.
 - Verify as you go (run the relevant tests/build after each meaningful change), and when all goals are settled, move to VERIFY for the final check.`;
 		case "VERIFY":
@@ -181,19 +206,21 @@ function planContract(mode: PlanMode): string {
 	const common = `[TOKYO — PLAN PHASE]
 You are producing an explicit, reviewable plan. No product code is written here.
 - READ-ONLY: edit and write are disabled; bash is restricted to read-only commands.
-- When the plan is final, save it with tokyo_plan_save, then advance with tokyo_phase to EXECUTE (this prompts the user for consent). Execution is barred until they approve.`;
+- When the plan is final, save it with tokyo_plan_save, then advance with tokyo_phase to EXECUTE (this prompts the user for consent). Execution is barred until they approve.
+- The plan MUST include a parallelization map: group steps into ordered batches, where steps within a batch are independent (disjoint files, no ordering constraint) and can run concurrently in EXECUTE, while cross-batch dependencies are explicit. This is what lets EXECUTE fan work out across subagents/team workers — a flat checklist forfeits that.
+- tokyo_plan_save REQUIRES a structured goals list (the plan's task DAG). EVERY code goal must declare the files it will write. Goals without files are REJECTED at plan-save time — you cannot save a plan that doesn't know which files it touches. (Non-code goals like docs/README/config may use an empty files array.) Provide the goals list as the second argument alongside the markdown plan body.`;
 	switch (mode) {
 		case "quick":
 			return `${common}
 
 PLANNING DEPTH: QUICK.
-- Draft the plan yourself: summary, file-level changes, sequencing, acceptance criteria, verification, risks.
+- Draft the plan yourself: summary, file-level changes, sequencing, acceptance criteria, verification, risks, and a brief parallelization map (which steps are independent vs ordered).
 - Right-size it; a small task does not need ceremony. You may sanity-check with spawn_subagents → critic if unsure, but it is optional.`;
 		case "consensus":
 			return `${common}
 
 PLANNING DEPTH: CONSENSUS.
-- Delegate plan authoring to the planner agent via spawn_subagents (give it the full clarified spec; it has no prior context).
+- Delegate plan authoring to the planner agent via spawn_subagents (give it the full clarified spec; it has no prior context). The planner returns a parallelization map (batches of independent steps) — preserve it through review so EXECUTE can fan out.
 - Then delegate review to architect and vetting to critic (you may run them in one parallel spawn_subagents call).
 - Iterate (max ~5 passes): consolidate their feedback, re-delegate to planner, re-review, until critic returns OKAY and architect is not BLOCK.
 - Keep the main context lean — let the subagents do the heavy thinking.`;

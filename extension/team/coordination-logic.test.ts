@@ -7,6 +7,8 @@ import { describe, expect, test } from "bun:test";
 import {
 	allTasksComplete,
 	canClaim,
+	findDependencyCycle,
+	findFileConflict,
 	findStaleClaims,
 	isStale,
 	nextClaimable,
@@ -120,6 +122,56 @@ describe("evidence-gated task completion", () => {
 	test("rejects todo/failed", () => {
 		expect(validateTaskCompletion([{ kind: "command", status: "todo", detail: "x" }]).ok).toBe(false);
 		expect(validateTaskCompletion([{ kind: "command", status: "failed", detail: "x" }]).ok).toBe(false);
+	});
+});
+
+describe("file-ownership gate", () => {
+	test("blocks claiming a task whose files overlap an in-progress task", () => {
+		const held = task("a", { status: "in_progress", owner: "w2", files: ["src/x.ts"] });
+		const t = task("b", { files: ["src/x.ts", "src/y.ts"] });
+		const r = canClaim(t, worker("w1"), [held, t]);
+		expect(r.ok).toBe(false);
+		expect(r.reason).toContain("file conflict");
+	});
+
+	test("allows claiming when files are disjoint", () => {
+		const held = task("a", { status: "in_progress", owner: "w2", files: ["src/x.ts"] });
+		const t = task("b", { files: ["src/y.ts"] });
+		expect(canClaim(t, worker("w1"), [held, t]).ok).toBe(true);
+	});
+
+	test("overlap with pending/complete tasks does not block", () => {
+		const pending = task("a", { status: "pending", files: ["src/x.ts"] });
+		const fin = task("c", { status: "complete", files: ["src/x.ts"] });
+		const t = task("b", { files: ["src/x.ts"] });
+		expect(findFileConflict(t, worker("w1"), [pending, fin, t])).toBeNull();
+	});
+});
+
+describe("dependency cycle detection", () => {
+	test("returns null for a DAG", () => {
+		const tasks = [task("a"), task("b", { depends_on: ["a"] }), task("c", { depends_on: ["b"] })];
+		expect(findDependencyCycle(tasks)).toBeNull();
+	});
+
+	test("detects a direct cycle", () => {
+		const tasks = [task("a", { depends_on: ["b"] }), task("b", { depends_on: ["a"] })];
+		const cycle = findDependencyCycle(tasks);
+		expect(cycle).not.toBeNull();
+		expect(cycle![0]).toBe(cycle![cycle!.length - 1]);
+	});
+
+	test("detects a longer cycle", () => {
+		const tasks = [
+			task("a", { depends_on: ["c"] }),
+			task("b", { depends_on: ["a"] }),
+			task("c", { depends_on: ["b"] }),
+		];
+		expect(findDependencyCycle(tasks)).not.toBeNull();
+	});
+
+	test("ignores unknown dep ids", () => {
+		expect(findDependencyCycle([task("a", { depends_on: ["ghost"] })])).toBeNull();
 	});
 });
 
