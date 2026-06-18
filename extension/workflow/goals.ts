@@ -32,6 +32,13 @@ export interface Goal {
 	files?: string[];
 	/** Goal ids this one depends on (must be complete first). */
 	depends_on?: string[];
+	/**
+	 * OMO TASK_SESSIONS: subagent session id that was delegated this goal.
+	 * Preserved across compaction/resume so the same subagent can resume with
+	 * accumulated context rather than starting cold. Set when a goal is
+	 * dispatched to a subagent or team worker; cleared on completion.
+	 */
+	subagent_session_id?: string;
 	/** sha256 of the completion receipt, set when completed. */
 	receipt_sha256?: string;
 }

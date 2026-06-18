@@ -37,8 +37,8 @@ interface Edge {
 }
 
 const TRANSITIONS: Record<Phase, Edge[]> = {
-	// IDLE is the sisyphus default: direct-execute, verify, done. The model can
-	// escalate to INTERVIEW (pipeline) when a task is too complex for one-shot.
+	// IDLE is the sisyphus default: direct-execute, verify, done.
+	// Pipeline entry (INTERVIEW) is manual-only via user slash commands.
 	IDLE: [{ to: "INTERVIEW" }],
 	// Interview can branch into research (clone/analysis) or straight to plan.
 	INTERVIEW: [{ to: "RESEARCH" }, { to: "PLAN" }, { to: "IDLE" }],
@@ -144,8 +144,8 @@ CORE RULE: Do the task. Verify it. Show evidence. Done.
 
 EXECUTION:
 - Execute directly. Do NOT over-plan, over-escalate, or over-narrate.
-- If the task is genuinely complex (multiple subsystems, multi-day scope, unclear requirements), escalate with tokyo_phase INTERVIEW to enter the full pipeline.
-- For everything else — just do it now. Full tool access (edit/write/bash) is yours.
+- The pipeline (INTERVIEW→PLAN→EXECUTE) is MANUAL ONLY — never call tokyo_phase unless the user explicitly commands it. If a task seems too large, just break it into the smallest clear deliverable and do that first.
+- Full tool access (edit/write/bash) is yours.
 
 COMPLETION: When done, present a compact summary:
 ## Changes Made

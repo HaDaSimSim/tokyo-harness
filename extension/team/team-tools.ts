@@ -47,6 +47,7 @@ const TeamParams = Type.Object({
 			Type.Literal("status"),
 			Type.Literal("send"),
 			Type.Literal("replies"),
+			Type.Literal("heartbeat"),
 			Type.Literal("recover"),
 			Type.Literal("delete"),
 			Type.Literal("hyperplan_run"),
@@ -266,6 +267,8 @@ export function makeTeamTool(hooks: TeamToolHooks): ToolDefinition<typeof TeamPa
 						const m = await co.readManifest();
 						const w = m?.workers.find((x) => x.id === params.worker_id);
 						if (!w) return done(false, `Worker '${params.worker_id}' not found in team manifest. Create the team first.`);
+						// Heartbeat: mark worker as busy when it claims work.
+						await co.heartbeat(params.worker_id, "busy").catch(() => {});
 						const r = await co.claimTask(params.task_id, w);
 						if (!r.ok) return done(false, `Claim refused: ${r.reason}`);
 						// surface the claim token so the Lead can transition the leased task.
@@ -315,6 +318,12 @@ export function makeTeamTool(hooks: TeamToolHooks): ToolDefinition<typeof TeamPa
 							: `(no replies yet from ${params.worker_id})`;
 						return done(true, text, { count: outbox.length });
 					}
+					case "heartbeat": {
+						if (!params.worker_id) return done(false, "heartbeat requires worker_id");
+						await co.heartbeat(params.worker_id, "busy");
+						return done(true, `Heartbeat: ${params.worker_id}`);
+					}
+
 					case "recover": {
 						const requeued = await co.recoverStaleClaims();
 						return done(true, requeued.length ? `Requeued stale tasks: ${requeued.join(", ")}.` : "No stale claims.", requeued);

@@ -155,8 +155,9 @@ describe("phase policy", () => {
 });
 
 describe("phase contract injection", () => {
-	test("IDLE injects nothing", () => {
-		expect(phaseContract("IDLE")).toBeNull();
+	test("IDLE injects sisyphus contract", () => {
+		expect(phaseContract("IDLE")).toContain("SISYPHUS");
+		expect(phaseContract("IDLE")).toContain("direct-execution");
 	});
 
 	test("planning phases announce read-only", () => {

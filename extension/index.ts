@@ -301,9 +301,9 @@ export default function harness(pi: ExtensionAPI) {
 	function setActive(next: boolean, ctx: ExtensionContext): void {
 		active = next;
 		if (next) {
-			// Activation enters the workflow at INTERVIEW (read-only clarity gate),
-			// not IDLE: turning tokyo on means "start interviewing me".
-			machine.restore("INTERVIEW");
+			// Activation enters IDLE (sisyphus default): direct-execute, verify, done.
+			// Pipeline (INTERVIEW→PLAN→EXECUTE) is opt-in via tokyo_phase INTERVIEW.
+			machine.restore("IDLE");
 			// Make tokyo agents discoverable by pi's agent system
 			void linkTokyoAgents(true);
 		} else {
@@ -593,7 +593,7 @@ export default function harness(pi: ExtensionAPI) {
 		if (process.env[HARNESS.autoEnv] === "1") restoredActive = true;
 
 		active = restoredActive;
-		machine.restore(restoredPhase ?? (active ? "INTERVIEW" : "IDLE"));
+		machine.restore(restoredPhase ?? "IDLE");
 		// Restore THIS branch's goals snapshot onto the flat goals.json so the ledger
 		// follows the branch (fixes the flat-file /fork bleed). Awaited so the first
 		// turn's reads don't race a stale sibling ledger. When the branch has NO
@@ -646,7 +646,7 @@ export default function harness(pi: ExtensionAPI) {
 			pi.appendEntry(HARNESS.stateEntryType, { active: true, profile: runProfile });
 			persistPhase();
 			ctx.ui.notify(
-				`${HARNESS.name} activated — interview phase${runProfile ? ` (${runProfile})` : ""}.`,
+				`${HARNESS.name} activated — sisyphus mode (direct-execute). Pipeline opt-in via tokyo_phase INTERVIEW.`,
 				"info",
 			);
 		},

@@ -635,6 +635,50 @@ export interface CompleteHooks {
 	onGoalsChange?: (goals: GoalsState) => void;
 }
 
+// ---- evidence-by-surface taxonomy (GJC H6) -----------------------------------
+
+type GoalSurface = "gui" | "cli" | "api" | "algorithm" | "generic";
+
+function classifySurface(objective: string, files: string[]): GoalSurface {
+	const obj = objective.toLowerCase();
+	if (/gui|ui|frontend|component|page|screen|modal|button|widget|browser|react|vue|svelte|dom|style|css|layout/i.test(obj)) return "gui";
+	if (/api|endpoint|route|handler|controller|middleware|graphql|grpc|rpc|rest|http|request|response/i.test(obj)) return "api";
+	if (/cli|command|shell|script|terminal|tui|cli-tool/i.test(obj)) return "cli";
+	if (/algorithm|sort|search|parse|encode|decode|hash|encrypt|decrypt|compress|tokenize|ast|tree|graph/i.test(obj)) return "algorithm";
+	const ext = files.map((f) => f.split(".").pop()?.toLowerCase() ?? "");
+	if (ext.some((e) => ["tsx", "jsx", "vue", "svelte", "css", "scss", "html"].includes(e))) return "gui";
+	return "generic";
+}
+
+function checkSurfaceEvidence(surface: GoalSurface, evidence: { kind: string; detail: string }[]): { ok: boolean; reason?: string } {
+	switch (surface) {
+		case "gui":
+			if (!evidence.some((e) => e.kind === "artifact" && /screenshot|screen|browser|snapshot|png|jpg|webp|visual/i.test(e.detail)) &&
+				!evidence.some((e) => e.kind === "command" && /browser|screenshot|snapshot|playwright|puppeteer|selenium/i.test(e.detail))) {
+				return { ok: false, reason: "GUI goal requires visual evidence — a screenshot, browser snapshot, or visual-diff test result. Add kind:'artifact' or kind:'command' referencing a screenshot/snapshot." };
+			}
+			break;
+		case "api":
+			if (!evidence.some((e) => e.kind === "command" && /curl|http|request|fetch|2\d\d|status.*200|status.*201/i.test(e.detail))) {
+				return { ok: false, reason: "API goal requires black-box evidence — an HTTP call result showing the endpoint responds correctly. Add kind:'command' referencing curl/httpie/fetch with the response status." };
+			}
+			break;
+		case "cli":
+			if (!evidence.some((e) => e.kind === "command" && /--help|--version|stdout|output|exit|ran|executed/i.test(e.detail))) {
+				return { ok: false, reason: "CLI goal requires a command transcript — the actual invocation and its output. Add kind:'command' showing the invocation and stdout." };
+			}
+			break;
+		case "algorithm":
+			if (!evidence.some((e) => e.kind === "command" && /test|bench|correct|edge|boundary|property|fuzz/i.test(e.detail))) {
+				return { ok: false, reason: "Algorithm goal requires adversarial test evidence — edge cases, boundary conditions, or property-based tests. Add kind:'command' referencing the tests." };
+			}
+			break;
+		default:
+			break;
+	}
+	return { ok: true };
+}
+
 export function makeCompleteTool(hooks: CompleteHooks): ToolDefinition<typeof CompleteParams, CompleteDetails> {
 	return {
 		name: "tokyo_complete",
@@ -676,6 +720,16 @@ export function makeCompleteTool(hooks: CompleteHooks): ToolDefinition<typeof Co
 				(e) => e.kind === "inspection" && /review(er|ed)?|architect/i.test(e.detail),
 			);
 			const isNonCodeGoal = /doc(s|umentation)|readme|config|setup|infra/i.test(goal.objective);
+
+		// EVIDENCE-BY-SURFACE TAXONOMY (GJC H6): the evidence must match the kind of
+		// work performed. A GUI goal is incomplete without a screenshot; a CLI goal
+		// without a transcript; an API goal without a black-box call result.
+		// This is the hard gate — surface-agnostic evidence is rejected.
+		const surface = classifySurface(goal.objective, goal.files ?? []);
+		const surfaceCheck = checkSurfaceEvidence(surface, evidence);
+		if (!surfaceCheck.ok) {
+			return failComplete(goal.id, `Evidence-by-surface gate: ${surfaceCheck.reason}`);
+		}
 
 			// OMO ORACLE GATE (universal): every goal completion needs at least one
 			// inspected-by-independent-reviewer evidence with status:'verified' — not
