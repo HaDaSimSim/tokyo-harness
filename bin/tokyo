@@ -1,23 +1,22 @@
 #!/usr/bin/env bash
 #
-# tokyo — start a tmux session running the tokyo workflow harness, with the team
-# (when spawned) visible as live, interactive pi windows you can watch and type into.
+# tokyo — start a zellij session running the tokyo workflow harness, with the team
+# (when spawned) visible as live, interactive pi tabs you can watch and type into.
 #
-#   tokyo                  # create the tokyo tmux session and attach
+#   tokyo                  # create the tokyo zellij session and attach
 #   tokyo "interview me"   # with an initial prompt
 #   tokyo --model ...      # any extra args are forwarded to the Lead pi
 #
-# Layout (one tmux session):
-#   window 0 "lead"   — your interactive pi TUI (the Lead). This is what you drive.
-#   window 1..N       — team workers, each a live interactive pi, spawned on demand
-#                       by the orchestrator. Switch with Ctrl-b <n> (or Ctrl-b w).
+# Layout (one zellij session):
+#   tab 0 "monitor" — dashboard (snapshot of all teams/workers)
+#   tab 1 "lead"    — your interactive pi TUI (the Lead). This is what you drive.
+#   tab 2..N        — team workers, each a live interactive pi, spawned on demand
+#                     by the orchestrator. Switch with Ctrl+o+n or mouse-click.
 #
-# The orchestrator runs as a background daemon (no window of its own). It spawns
-# worker windows, injects prompts via tmux, and reads their replies from each
-# worker's session .jsonl — so workers are real, visible pi sessions, driven like
-# subagents.
+# The orchestrator runs as a background daemon. It spawns worker tabs, injects
+# prompts, and reads their replies from each worker's session .jsonl.
 #
-# tmux is REQUIRED. tokyo will not start without it.
+# zellij is REQUIRED. tokyo will not start without it.
 #
 # Env knobs:
 #   TOKYO_NO_DEV_EXT=1   skip the explicit -e (rely on auto-discovery)
@@ -28,10 +27,10 @@
 #   ln -s "$PWD/bin/tokyo" ~/.local/bin/tokyo
 set -euo pipefail
 
-# ── tmux is a hard requirement ────────────────────────────────────────────────
-if ! command -v tmux >/dev/null 2>&1; then
-	echo "tokyo requires tmux, which is not installed or not on PATH." >&2
-	echo "Install it (e.g. 'brew install tmux') and try again." >&2
+# ── zellij is a hard requirement ──────────────────────────────────────────────
+if ! command -v zellij >/dev/null 2>&1; then
+	echo "tokyo requires zellij, which is not installed or not on PATH." >&2
+	echo "Install it (e.g. 'brew install zellij') and try again." >&2
 	exit 1
 fi
 
@@ -58,13 +57,13 @@ PROJECT_DIR="$(pwd)"
 SOCK="$PROJECT_DIR/.tokyo/orchestrator.sock"
 ORCH_PID=""
 
-# Stable, project-scoped session name. Sanitize to tmux-safe chars.
+# Stable, project-scoped session name. Sanitize to alphanumeric+dash.
 SESSION="tokyo-$(basename "$PROJECT_DIR" | sed 's/[^a-zA-Z0-9]/-/g; s/--*/-/g; s/^-//; s/-$//' | cut -c1-20)"
 
-# If a session with this name already exists, just attach to it (resume the team).
-if tmux has-session -t "$SESSION" 2>/dev/null; then
+# If a zellij session with this name already exists, just attach.
+if zellij list-sessions 2>/dev/null | grep -q "^$SESSION "; then
 	echo "[tokyo] attaching to existing session '$SESSION'" >&2
-	exec tmux attach -t "$SESSION"
+	exec zellij attach "$SESSION"
 fi
 
 cleanup() {
@@ -73,16 +72,17 @@ cleanup() {
 		wait "$ORCH_PID" 2>/dev/null || true
 	fi
 	rm -f "$SOCK" "${SOCK%.sock}.pid" 2>/dev/null || true
+	rm -f "$LAYOUT_KDL" 2>/dev/null || true
 }
 trap cleanup EXIT INT TERM
 
-# ── orchestrator daemon (serve-only): owns the worker windows ─────────────────
+# ── orchestrator daemon (serve-only): owns the worker tabs ────────────────────
 if [ "${TOKYO_NO_ORCH:-0}" != "1" ] && [ -n "$ORCH" ]; then
 	MODEL_ARG="${TOKYO_ORCH_MODEL:-relay/claude-opus-4.8}"
 	"$ORCH" serve \
 		--model "$MODEL_ARG" \
 		--project-dir "$PROJECT_DIR" \
-		--tmux-session "$SESSION" &
+		--session "$SESSION" &
 	ORCH_PID=$!
 	for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do
 		[ -S "$SOCK" ] && break
@@ -98,50 +98,65 @@ elif [ "${TOKYO_NO_ORCH:-0}" != "1" ]; then
 	echo "[tokyo] warning: orchestrator binary not found (build: cd orchestrator && cargo build --release)" >&2
 fi
 
-# ── build the Lead command for window 0 ───────────────────────────────────────
-# Auto-activate the harness; the extension reads TOKYO_AUTO in session_start.
-# Tell the extension which tmux session owns the team windows.
-LEAD_ENV="TOKYO_AUTO=1 TOKYO_TMUX_SESSION=$(printf %q "$SESSION")"
+# ── build the Lead command for tab 1 "lead" ───────────────────────────────────
+LEAD_ENV="TOKYO_AUTO=1 TOKYO_ZELLIJ_SESSION=$(printf %q "$SESSION")"
 if [ "${TOKYO_NO_DEV_EXT:-0}" = "1" ] || [ ! -f "$EXT" ]; then
-	LEAD_CMD="$LEAD_ENV pi"
+	LEAD_PI="$LEAD_ENV pi"
 else
-	LEAD_CMD="$LEAD_ENV pi -e $(printf %q "$EXT")"
+	LEAD_PI="$LEAD_ENV pi -e $(printf %q "$EXT")"
 fi
 # Forward any extra args (initial prompt, --model, ...) to the Lead pi.
+LEAD_CMD="$LEAD_PI"
 for arg in "$@"; do
 	LEAD_CMD="$LEAD_CMD $(printf %q "$arg")"
 done
 
-# ── create the tmux session with the Lead in window 0, then attach ────────────
-# remain-on-exit so a crashed Lead leaves the window for inspection rather than
-# silently collapsing the session.
-tmux new-session -d -s "$SESSION" -n lead "$LEAD_CMD"
-tmux set-option -t "$SESSION" mouse on 2>/dev/null || true
-# Drive the OS terminal title from tmux: "tokyo · <session> · <window>".
-# set-titles makes tmux emit the xterm title escape; the string uses the
-# active window name (lead / w-<id>) so the title tracks what you're looking at.
-tmux set-option -t "$SESSION" set-titles on 2>/dev/null || true
-tmux set-option -t "$SESSION" set-titles-string "tokyo: #S [#W]" 2>/dev/null || true
+# ── create a zellij layout KDL ────────────────────────────────────────────────
+# Tab 0: monitor (placeholder — the orchestrator or a pi command populates it)
+# Tab 1: lead (the main pi session you interact with)
+LAYOUT_KDL=$(mktemp /tmp/tokyo-layout-XXXXXX.kdl)
+cat > "$LAYOUT_KDL" << KDL_EOF
+layout {
+    tab name="monitor" {
+        pane size=1 {
+            command "echo"
+            args "tokyo monitor — teams/workers appear as tabs"
+        }
+    }
+    tab name="lead" focus=true {
+        pane {
+            command "sh"
+            args "-c" "$LEAD_CMD"
+        }
+    }
+}
+KDL_EOF
 
-# Safety net for SIGKILL / terminal-closed paths: when the Lead's pane dies,
-# the extension's session_shutdown hook never fires, so we can't rely on the
-# extension to send the IPC pause. Watch pane-died and, if it was the Lead
-# window, run `tokyo pause` ourselves. The pause kills the worker windows
-# (orchestrator's pause handler calls kill-window), which leaves the session
-# empty and triggers tmux's auto-destroy — bin/tokyo's `tmux attach` returns,
-# the cleanup trap runs, and we're back to a clean state.
-#
-# Quoting layers (deeply nested, sorry):
-#   bash → tmux set-hook → tmux if-shell → tmux run-shell → /bin/sh -c → tokyo
-# printf %q handles the project dir so paths with spaces/quotes stay safe.
-PROJECT_DIR_Q=$(printf %q "$PROJECT_DIR")
-HOOK_ACTION="run-shell \"cd $PROJECT_DIR_Q && tokyo pause\""
-HOOK_CMD="if-shell -F '#{==:#{window_name},lead}' '$HOOK_ACTION'"
-tmux set-hook -t "$SESSION" pane-died "$HOOK_CMD" 2>/dev/null || true
+# ── start zellij session detached, then attach ────────────────────────────────
+# ZELLIJ_AUTO_ATTACH=0 prevents zellij from immediately attaching — we start it
+# as a background daemon, wait for the session to come up, then attach manually
+# so the user lands on the lead tab.
+ZELLIJ_AUTO_ATTACH=0 zellij \
+	--session "$SESSION" \
+	--layout "$LAYOUT_KDL" \
+	--cwd "$PROJECT_DIR" &
+ZELLIJ_PID=$!
+
+# Wait for the session to initialize, then attach.
+# zellij list-sessions will show it once the layout has loaded.
+for _ in 1 2 3 4 5 6 7 8 9 10; do
+	if zellij list-sessions 2>/dev/null | grep -q "^$SESSION "; then
+		break
+	fi
+	sleep 0.2
+done
+
+# Set OS terminal title.
+echo -ne "\033]0;tokyo: $SESSION [lead]\033\\" 2>/dev/null || true
 
 # Attach in the foreground. When you detach or the Lead exits, we fall through
 # to cleanup (orchestrator shutdown + socket removal).
-tmux attach -t "$SESSION"
+zellij attach "$SESSION" 2>/dev/null || true
 
-# Lead window gone / detached → tear down the whole session so no orphan windows.
-tmux kill-session -t "$SESSION" 2>/dev/null || true
+# Session gone — tear down.
+zellij kill-session "$SESSION" 2>/dev/null || true

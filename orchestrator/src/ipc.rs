@@ -60,10 +60,10 @@ pub enum IpcCommand {
     },
     /// Graceful pause: save orchestrator snapshot, kill all workers, then exit.
     /// Triggered automatically when the lead quits (extension's session_shutdown
-    /// hook) or when the lead's tmux pane dies (bin/tokyo safety net).
+    /// hook) or when the lead's zellij pane dies (bin/tokyo safety net).
     Pause,
     /// Recreate a single worker from a snapshot entry. Used by `tokyo resume` to
-    /// rehydrate the team after a pause killed the worker tmux windows.
+    /// rehydrate the team after a pause killed the worker zellij windows.
     RestoreWorker {
         id: String,
         model: String,

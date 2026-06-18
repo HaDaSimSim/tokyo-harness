@@ -1,7 +1,7 @@
 use clap::Parser;
 
 mod rpc;
-mod tmux_worker;
+mod worker;
 mod team;
 mod ipc;
 mod orchestrator;
@@ -62,11 +62,11 @@ enum Cli {
         #[arg(long)]
         project_dir: Option<String>,
 
-        /// tmux session name that owns the Lead + worker windows. When set,
+        /// zellij session name that owns the Lead + worker windows. When set,
         /// workers are spawned as visible interactive pi windows in this session
         /// (driven via tmux) instead of headless RPC pipes.
         #[arg(long)]
-        tmux_session: Option<String>,
+        session: Option<String>,
     },
     /// Multi-round persistence test: verifies context carries across prompts
     TestPersist {
@@ -127,7 +127,7 @@ async fn main() -> anyhow::Result<()> {
             worker.shutdown().await?;
             println!("[tokyo] done");
         }
-        Cli::Serve { model, project_dir, tmux_session } => {
+        Cli::Serve { model, project_dir, session } => {
             let cwd = match project_dir {
                 Some(ref d) => std::path::PathBuf::from(d),
                 None => std::env::current_dir()?,
@@ -136,15 +136,15 @@ async fn main() -> anyhow::Result<()> {
             eprintln!("[tokyo-serve] model={model}");
             eprintln!("[tokyo-serve] project: {}", cwd.display());
             eprintln!("[tokyo-serve] ipc socket: {}", sock_path.display());
-            match tmux_session {
-                Some(ref s) => eprintln!("[tokyo-serve] tmux session: {s} (workers spawn as visible windows)"),
-                None => eprintln!("[tokyo-serve] no tmux session — workers unavailable"),
+            match session {
+                Some(ref s) => eprintln!("[tokyo-serve] zellij session: {s} (workers spawn as visible windows)"),
+                None => eprintln!("[tokyo-serve] no zellij session — workers unavailable"),
             }
 
             // IPC server + worker pool only. No Lead, no TUI — the user's pi TUI
             // (launched separately by bin/tokyo) is the Lead and connects here.
             let ipc_rx = ipc::start_ipc_server(&sock_path).await?;
-            let mut orch = orchestrator::Orchestrator::new(&model, tmux_session, cwd.clone());
+            let mut orch = orchestrator::Orchestrator::new(&model, session, cwd.clone());
             eprintln!("[tokyo-serve] ready — workers spawn on-demand via IPC");
 
             // Run the orchestrator loop until the socket is removed or we're killed.
@@ -443,7 +443,7 @@ async fn main() -> anyhow::Result<()> {
             println!("[tokyo] resuming from snapshot ({} workers, paused at {})", snap.workers.len(), snap.paused_at);
 
             // Must match bin/tokyo's session-name formula so attach finds the right one.
-            let session = tmux_session_name(&cwd);
+            let session = session_name(&cwd);
             let sock_path = ipc::default_socket_path(&cwd);
             let pid_path = sock_path.with_extension("pid");
 
@@ -458,38 +458,47 @@ async fn main() -> anyhow::Result<()> {
                 }
             }
 
-            // 2. Clean any stale tmux session. Workers from a prior session are
-            //    gone (paused killed them) and the tmux session may have leftover
+            // 2. Clean any stale zellij session. Workers from a prior session are
+            //    gone (paused killed them) and the zellij session may have leftover
             //    windows. We rebuild from scratch.
-            kill_tmux_session(&session);
+            kill_session(&session);
             std::fs::create_dir_all(cwd.join(".tokyo").join("sessions")).ok();
 
-            // 3. Create the tmux session with the lead already running in window 0.
+            // 3. Create the zellij session with the lead running in a tab, detached.
+            //    We use a temporary layout KDL file to define the initial tab.
             let ext_path = resolve_extension_path();
             let sess_dir = cwd.join(".tokyo").join("sessions");
             let lead_cmd = build_lead_cmd(&session, &sess_dir, &ext_path);
-            let status = std::process::Command::new("tmux")
+            let layout_kdl = std::env::temp_dir().join(format!("tokyo-resume-layout-{}.kdl", std::process::id()));
+            std::fs::write(&layout_kdl, format!(
+                "layout {{ tab name=\"lead\" focus=true {{ pane {{ command \"sh\" args \"-c\" \"{}\" }} }} }}",
+                lead_cmd.replace('\\', "\\\\").replace('"', "\\\"")
+            ))?;
+            let status = std::process::Command::new("zellij")
+                .env("ZELLIJ_AUTO_ATTACH", "0")
                 .args([
-                    "new-session", "-d", "-s", &session,
-                    "-n", "lead",
-                    "-c", &cwd.to_string_lossy(),
-                    &lead_cmd,
+                    "--session", &session,
+                    "--layout", &layout_kdl.to_string_lossy(),
+                    "--cwd", &cwd.to_string_lossy(),
                 ])
-                .status()?;
-            if !status.success() {
-                anyhow::bail!("failed to create tmux session {session}");
+                .spawn()?;
+            // Wait for the session to come up (list-sessions shows it).
+            for _ in 0..30 {
+                let out = std::process::Command::new("zellij")
+                    .args(["list-sessions"])
+                    .output();
+                if let Ok(o) = out {
+                    if String::from_utf8_lossy(&o.stdout).lines().any(|l| l.trim() == session) {
+                        break;
+                    }
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(200)).await;
             }
-            // Match bin/tokyo: drive the OS terminal title from the active window.
-            for opt in [
-                ("mouse", "on"),
-                ("set-titles", "on"),
-            ] {
-                let _ = std::process::Command::new("tmux")
-                    .args(["set-option", "-t", &session, opt.0, opt.1])
-                    .status();
-            }
-            let _ = std::process::Command::new("tmux")
-                .args(["set-option", "-t", &session, "set-titles-string", "tokyo: #S [#W]"])
+            let _ = std::fs::remove_file(&layout_kdl);
+
+            // Set OS terminal title via ANSI escape.
+            let _ = std::process::Command::new("sh")
+                .args(["-c", &format!("printf '\\033]0;tokyo: {} [lead]\\033\\\\' 2>/dev/null", session)])
                 .status();
 
             // 4. Spawn the orchestrator as a DETACHED background process. It
@@ -502,7 +511,7 @@ async fn main() -> anyhow::Result<()> {
                     "serve",
                     "--model", &model,
                     "--project-dir", &cwd.to_string_lossy(),
-                    "--tmux-session", &session,
+                    "--session", &session,
                 ])
                 .stdin(std::process::Stdio::null())
                 .stdout(std::process::Stdio::null())
@@ -520,7 +529,7 @@ async fn main() -> anyhow::Result<()> {
             println!("[tokyo]   orchestrator ready");
 
             // 6. Restore each saved worker via the new RestoreWorker IPC. This
-            //    spawns a fresh tmux window per worker and re-primes it with the
+            //    spawns a fresh zellij window per worker and re-primes it with the
             //    saved prime_message so role identity survives the pause.
             for w in &snap.workers {
                 let prime = match &w.prime_message {
@@ -549,11 +558,11 @@ async fn main() -> anyhow::Result<()> {
             snapshot::clear_snapshot(&cwd)?;
             println!("[tokyo] resumed. Attaching to {session}...");
 
-            // 8. Attach. On detach/exit, leave the orchestrator + tmux session
+            // 8. Attach. On detach/exit, leave the orchestrator + zellij session
             //    alive — the user explicitly pauses when they want to stop.
             //    (Different from bin/tokyo, which always kills the session.)
-            let _ = std::process::Command::new("tmux")
-                .args(["attach", "-t", &session])
+            let _ = std::process::Command::new("zellij")
+                .args(["attach", &session])
                 .status();
         }
     }
@@ -565,10 +574,10 @@ async fn main() -> anyhow::Result<()> {
 use std::path::PathBuf;
 use std::process::Command;
 
-/// Compute the tmux session name for a project dir. MUST match bin/tokyo's
+/// Compute the zellij session name for a project dir. MUST match bin/tokyo's
 /// `SESSION="tokyo-..."` formula exactly, or attach will fail to find the
 /// session we just created.
-fn tmux_session_name(cwd: &std::path::Path) -> String {
+fn session_name(cwd: &std::path::Path) -> String {
     let base = cwd
         .file_name()
         .map(|s| s.to_string_lossy().into_owned())
@@ -585,12 +594,12 @@ fn tmux_session_name(cwd: &std::path::Path) -> String {
     format!("tokyo-{trimmed}")
 }
 
-/// Best-effort: if a tmux session with this name exists, kill it. Used by resume
+/// Best-effort: if a zellij session with this name exists, kill it. Used by resume
 /// to clear any leftover windows (workers from a prior session are dead but the
 /// windows may still be visible with `remain-on-exit on`).
-fn kill_tmux_session(session: &str) {
-    let _ = Command::new("tmux")
-        .args(["kill-session", "-t", session])
+fn kill_session(session: &str) {
+    let _ = Command::new("zellij")
+        .args(["kill-session", session])
         .status();
 }
 
@@ -604,13 +613,13 @@ fn resolve_extension_path() -> PathBuf {
     home.join("projects/tokyo-harness/extension/index.ts")
 }
 
-/// Build the lead's tmux command. Mirrors bin/tokyo's LEAD_ENV/LEAD_CMD.
+/// Build the lead's zellij command. Mirrors bin/tokyo's LEAD_ENV/LEAD_CMD.
 fn build_lead_cmd(session: &str, sess_dir: &std::path::Path, ext_path: &std::path::Path) -> String {
     let pi = crate::rpc::pi_bin();
     let sess = sess_dir.to_string_lossy();
     let ext = ext_path.to_string_lossy();
     format!(
-        "TOKYO_AUTO=1 TOKYO_TMUX_SESSION={} {} --session-dir {} -e {}",
+        "TOKYO_AUTO=1 TOKYO_ZELLIJ_SESSION={} {} --session-dir {} -e {}",
         shell_quote(session),
         shell_quote(&pi),
         shell_quote(&sess),

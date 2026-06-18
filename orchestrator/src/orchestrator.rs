@@ -10,18 +10,18 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use crate::ipc::{IpcCommand, IpcMessage, IpcResponse, WorkerResult, WorkerSpec, WorkerStatus};
 use crate::snapshot::{self, OrchestratorSnapshot, WorkerSnapshot};
-use crate::tmux_worker::TmuxWorker;
+use crate::worker::Worker;
 use tokio::sync::{mpsc, Mutex, Notify};
 
-/// Shared worker pool: id -> live tmux-backed pi worker.
-pub type WorkerPool = Arc<Mutex<HashMap<String, TmuxWorker>>>;
+/// Shared worker pool: id -> live zellij-backed pi worker.
+pub type WorkerPool = Arc<Mutex<HashMap<String, Worker>>>;
 
 /// Static runtime config shared with every command handler: where workers live.
 #[derive(Clone)]
 pub struct WorkerEnv {
-    /// tmux session that owns the Lead + worker windows. None => no tmux => team
-    /// features are unavailable (we refuse to spawn invisible workers).
-    pub tmux_session: Option<String>,
+    /// zellij session that owns the Lead + worker tabs. None => no zellij =>
+    /// team features are unavailable (we refuse to spawn invisible workers).
+    pub session: Option<String>,
     /// Project dir (.tokyo/ root), used for worker session dirs + worktrees.
     pub cwd: PathBuf,
     pub default_model: String,
@@ -49,11 +49,11 @@ pub struct Orchestrator {
 }
 
 impl Orchestrator {
-    pub fn new(default_model: &str, tmux_session: Option<String>, cwd: PathBuf) -> Self {
+    pub fn new(default_model: &str, session: Option<String>, cwd: PathBuf) -> Self {
         Self {
             workers: Arc::new(Mutex::new(HashMap::new())),
             jobs: Arc::new(Mutex::new(HashMap::new())),
-            env: WorkerEnv { tmux_session, cwd, default_model: default_model.to_string() },
+            env: WorkerEnv { session, cwd, default_model: default_model.to_string() },
             shutdown: Arc::new(Notify::new()),
         }
     }
@@ -138,7 +138,7 @@ async fn handle(
 async fn create_team(workers: &WorkerPool, env: &WorkerEnv, _team_id: &str, specs: Vec<WorkerSpec>) -> IpcResponse {
     // tmux is required for visible workers. No session => refuse (we never spawn
     // invisible workers anymore).
-    let session = match &env.tmux_session {
+    let session = match &env.session {
         Some(s) => s.clone(),
         None => return IpcResponse::Error {
             message: "no tmux session — cannot spawn visible workers. Start via the 'tokyo' launcher.".to_string(),
@@ -150,7 +150,7 @@ async fn create_team(workers: &WorkerPool, env: &WorkerEnv, _team_id: &str, spec
         if let Some(old) = workers.lock().await.remove(&spec.id) {
             old.shutdown().await;
         }
-        match TmuxWorker::spawn(&session, &spec.id, &spec.model, &env.cwd, None).await {
+        match Worker::spawn(&session, &spec.id, &spec.model, &env.cwd, None).await {
             Ok(mut w) => {
                 // Prime with system prompt (the worker's role identity).
                 let prime = format!(
@@ -211,10 +211,10 @@ async fn broadcast(workers: &WorkerPool, message: &str) -> IpcResponse {
     // of 5 model calls (often 2-3 min, blowing the IPC timeout). Parallel
     // makes a round cost ~the slowest single worker.
     //
-    // tmux workers hold no clonable handle, but TmuxWorker only stores ids/paths
+    // tmux workers hold no clonable handle, but Worker only stores ids/paths
     // (the live process is in tmux), so we still take them out to run prompts
     // concurrently, then reinsert. Worker sessions persist in tmux regardless.
-    let taken: Vec<(String, TmuxWorker)> = {
+    let taken: Vec<(String, Worker)> = {
         let mut pool = workers.lock().await;
         let ids: Vec<String> = pool.keys().cloned().collect();
         ids.into_iter().filter_map(|id| pool.remove(&id).map(|w| (id, w))).collect()
@@ -268,7 +268,7 @@ async fn stop_worker(workers: &WorkerPool, worker_id: &str) -> IpcResponse {
 }
 
 async fn stop_all(workers: &WorkerPool) -> IpcResponse {
-    let taken: HashMap<String, TmuxWorker> = std::mem::take(&mut *workers.lock().await);
+    let taken: HashMap<String, Worker> = std::mem::take(&mut *workers.lock().await);
     for (_, worker) in taken {
         worker.shutdown().await;
     }
@@ -323,7 +323,7 @@ async fn pause(
     };
     eprintln!("[orchestrator] pause: snapshot saved ({} workers) at {}", snap.workers.len(), snap_path.display());
 
-    let taken: HashMap<String, TmuxWorker> = std::mem::take(&mut *workers.lock().await);
+    let taken: HashMap<String, Worker> = std::mem::take(&mut *workers.lock().await);
     for (id, worker) in taken {
         worker.shutdown().await;
         eprintln!("[orchestrator] pause: killed worker {id}");
@@ -346,7 +346,7 @@ async fn restore_worker(
     model: &str,
     prime_message: &str,
 ) -> IpcResponse {
-    let session = match &env.tmux_session {
+    let session = match &env.session {
         Some(s) => s.clone(),
         None => {
             return IpcResponse::Error {
@@ -359,7 +359,7 @@ async fn restore_worker(
         old.shutdown().await;
     }
 
-    let mut w = match TmuxWorker::spawn(&session, id, model, &env.cwd, None).await {
+    let mut w = match Worker::spawn(&session, id, model, &env.cwd, None).await {
         Ok(w) => w,
         Err(e) => return IpcResponse::Error { message: format!("restore {id}: spawn failed: {e}") },
     };

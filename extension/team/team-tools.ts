@@ -146,7 +146,7 @@ export function teardownAllTeams(): void {
 		const oc = new OrchestratorClient(process.cwd());
 		if (!oc.isAvailable()) return;
 		// Try a graceful pause first. This saves a snapshot the user can resume
-		// from, and kills the worker tmux windows so they don't linger.
+		// from, and kills the worker zellij windows so they don't linger.
 		oc.pause().catch(() => {
 			// Pause failed (orchestrator may be shutting down or socket died).
 			// Fall back to a hard stop so workers still get killed.

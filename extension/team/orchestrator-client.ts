@@ -212,7 +212,7 @@ export class OrchestratorClient {
 
 	/**
 	 * Trigger a graceful pause: the orchestrator snapshots the live team (with
-	 * prime_messages for resume), kills all worker tmux windows, then exits.
+	 * prime_messages for resume), kills all worker zellij windows, then exits.
 	 * Called from the Lead's session_shutdown hook so a normal /exit or Ctrl+D
 	 * turns into a clean pause instead of leaving zombie workers behind.
 	 *
