@@ -33,6 +33,8 @@ const TeamParams = Type.Object({
 			Type.Literal("delete"),
 			Type.Literal("hyperplan_run"),
 			Type.Literal("hyperplan_poll"),
+			Type.Literal("claim_goal"),
+			Type.Literal("release_goal"),
 		],
 		{ description: "Team coordination verb." },
 	),
@@ -58,6 +60,7 @@ const TeamParams = Type.Object({
 	depends_on: Type.Optional(Type.Array(Type.String(), { description: "For add_task: prerequisite task ids." })),
 	task_id: Type.Optional(Type.String({ description: "For claim/transition." })),
 	job_id: Type.Optional(Type.String({ description: "For hyperplan_poll: the job id returned by hyperplan_run." })),
+	goal_id: Type.Optional(Type.String({ description: "For claim_goal/release_goal: the goal id to claim or release." })),
 	worker_id: Type.Optional(Type.String({ description: "For claim/send: the worker id." })),
 	status: Type.Optional(
 		Type.Union(
@@ -372,6 +375,49 @@ export function makeTeamTool(hooks: TeamToolHooks): ToolDefinition<typeof TeamPa
 						} catch (e) {
 							return done(false, `hyperplan_poll failed: ${(e as Error).message}`);
 						}
+					}
+					case "claim_goal": {
+						// GJC-style claim: O_EXCL goal assignment to a worker.
+						// Writes .tokyo/ledger/goals/<id>.claim.json atomically.
+						if (!params.goal_id?.trim() || !params.worker_id?.trim()) return done(false, "claim_goal requires goal_id and worker_id");
+						const { readGoals, writeGoalIndex, writeGoal } = await import("../team/state-tools.ts");
+						const goals = await readGoals(hooks.state);
+						const goal = goals.goals.find((g) => g.id === params.goal_id);
+						if (!goal) return done(false, `Goal '${params.goal_id}' not found`);
+						if (goal.status !== "active") return done(false, `Goal '${params.goal_id}' is ${goal.status}, not claimable`);
+						// Check no existing valid claim
+						const claimPath = `ledger/goals/${params.goal_id}.claim.json`;
+						const existing = await hooks.state.readTokyoJson(claimPath);
+						if (existing?.ok && existing.value) {
+							const c = existing.value as { worker_id?: string; leased_until?: string };
+							if (c.leased_until && new Date(c.leased_until) > new Date()) {
+								return done(false, `Goal '${params.goal_id}' already claimed by ${c.worker_id} until ${c.leased_until}. Use release_goal or wait for expiry.`);
+							}
+						}
+						// Stale claim — overwrite
+						const leaseEnd = new Date(Date.now() + 30 * 60_000).toISOString();
+						const claim = { goal_id: params.goal_id, worker_id: params.worker_id, leased_until: leaseEnd, ts: new Date().toISOString() };
+						await hooks.state.writeJsonAtomic(claimPath, claim, { audit: { category: "agents", verb: "goal_claim", skill: "team" } });
+						// Update goal metadata
+						(goal as any).claimed_by = params.worker_id;
+						(goal as any).leased_until = leaseEnd;
+						await writeGoal(hooks.state, goal);
+						await writeGoalIndex(hooks.state, goals.goals, goals.current_goal_id);
+						return done(true, `Goal '${params.goal_id}' claimed by ${params.worker_id} (lease: 30 min).`);
+					}
+					case "release_goal": {
+						if (!params.goal_id?.trim()) return done(false, "release_goal requires goal_id");
+						const claimPath = `ledger/goals/${params.goal_id}.claim.json`;
+						try { await hooks.state.deleteJson(claimPath); } catch { /* already gone */ }
+						const { readGoals, writeGoal } = await import("../team/state-tools.ts");
+						const goals = await readGoals(hooks.state);
+						const goal = goals.goals.find((g) => g.id === params.goal_id);
+						if (goal) {
+							delete (goal as any).claimed_by;
+							delete (goal as any).leased_until;
+							await writeGoal(hooks.state, goal);
+						}
+						return done(true, `Goal '${params.goal_id}' released.`);
 					}
 				}
 				return done(false, "unknown op");

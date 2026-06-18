@@ -311,13 +311,13 @@ export async function readGoals(state: StateWriter): Promise<GoalsState> {
 	return { goals, current_goal_id: currentGoalId };
 }
 
-async function writeGoal(state: StateWriter, goal: Goal): Promise<void> {
+export async function writeGoal(state: StateWriter, goal: Goal): Promise<void> {
 	await state.writeJsonAtomic(goalPath(goal.id), goal, {
 		audit: { category: "state", verb: "goal_write", skill: "execute", owner: "tokyo-runtime" },
 	});
 }
 
-async function writeGoalIndex(state: StateWriter, goals: Goal[], currentGoalId: string | null): Promise<void> {
+export async function writeGoalIndex(state: StateWriter, goals: Goal[], currentGoalId: string | null): Promise<void> {
 	await state.writeJsonAtomic(GOALS_INDEX, {
 		goal_ids: goals.map((g) => g.id),
 		current_goal_id: currentGoalId,

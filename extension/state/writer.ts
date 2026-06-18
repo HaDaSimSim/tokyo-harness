@@ -363,6 +363,15 @@ export class StateWriter {
 	// ---- deletes (conditional / audited) --------------------------------------
 
 	/**
+	 * Delete a file under the state root. Best-effort — no error if absent.
+	 */
+	async deleteJson(relativePath: string): Promise<void> {
+		const target = this.resolveTarget(relativePath);
+		if (!target) return;
+		try { await fsp.rm(target, { force: true }); } catch { /* absent → no-op */ }
+	}
+
+	/**
 	 * Delete a file only if the predicate (run against its current parsed JSON
 	 * content) returns true. Returns true if deleted, false if the predicate
 	 * rejected or the file was absent.
